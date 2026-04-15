@@ -1,0 +1,158 @@
+import { useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { useState } from 'react';
+import LocationOnRoundedIcon from '@mui/icons-material/LocationOnRounded';
+import BookmarkBorderRoundedIcon from '@mui/icons-material/BookmarkBorderRounded';
+import BookmarkRoundedIcon from '@mui/icons-material/BookmarkRounded';
+import VerifiedRoundedIcon from '@mui/icons-material/VerifiedRounded';
+import { userAPI } from '../../../../api/user.api';
+import { useApp } from '../../context/AppContext';
+import toast from 'react-hot-toast';
+
+const OfferCard = ({ offer, variant = 'list', onSaveToggle }) => {
+  const navigate = useNavigate();
+  const { user, isLoggedIn } = useApp();
+  const offerId = offer._id || offer.id;
+  const [isSaved, setIsSaved] = useState(() => {
+    // Check if offer is in user's savedOffers
+    return user?.savedOffers?.includes(offerId) || false;
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Use merchant data from API (offer.merchant) or fallback to merchantId
+  const merchant = offer.merchant || { storeName: offer.merchantName || 'Store', verified: false, distance: 'N/A' };
+
+  const handleSave = async (e) => {
+    e.stopPropagation();
+    
+    if (!isLoggedIn) {
+      toast.error('Please login to save offers');
+      navigate('/login');
+      return;
+    }
+    
+    if (isSaving) return;
+    
+    setIsSaving(true);
+    try {
+      const response = await userAPI.toggleSavedOffer(offerId);
+      setIsSaved(response.isSaved);
+      toast.success(response.isSaved ? 'Offer saved!' : 'Offer removed', {
+        icon: response.isSaved ? '🔖' : '✅',
+        duration: 2000,
+      });
+      onSaveToggle?.();
+    } catch (error) {
+      console.error('Failed to save offer:', error);
+      toast.error('Failed to save offer. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const discountLabel =
+    offer.discountType === 'percentage'
+      ? `${offer.discountValue}% OFF`
+      : offer.discountValue === 0
+      ? 'FREE'
+      : `₹${offer.discountValue} OFF`;
+
+  // ── Grid variant ───────────────────────────────────────────────────────────
+  if (variant === 'grid') {
+    return (
+      <motion.div
+        whileTap={{ scale: 0.97 }}
+        onClick={() => navigate(`/offer/${offerId}`)}
+        className="bg-surface rounded-2xl shadow-card overflow-hidden cursor-pointer w-full max-w-[280px] mx-auto"
+      >
+        <div className="relative aspect-[4/3] overflow-hidden">
+          <img
+            src={offer.image}
+            alt={offer.title}
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+            loading="lazy"
+          />
+          <span className="absolute top-2 left-2 bg-primary text-white text-xs font-bold px-2 py-1 rounded-lg">
+            {discountLabel}
+          </span>
+          <motion.button
+            whileTap={{ scale: 0.8 }}
+            onClick={handleSave}
+            className="absolute top-2 right-2 w-7 h-7 bg-white/90 rounded-full flex items-center justify-center shadow"
+          >
+            {isSaved
+              ? <BookmarkRoundedIcon sx={{ fontSize: 16 }} className="text-primary" />
+              : <BookmarkBorderRoundedIcon sx={{ fontSize: 16 }} className="text-gray-500" />
+            }
+          </motion.button>
+        </div>
+        <div className="p-3">
+          <p className="text-sm font-semibold text-text-primary line-clamp-2">{offer.title}</p>
+          <p className="text-xs text-text-secondary mt-0.5">{merchant?.storeName}</p>
+          <div className="flex items-center gap-1 mt-1.5">
+            <LocationOnRoundedIcon sx={{ fontSize: 12 }} className="text-primary" />
+            <span className="text-xs text-text-secondary">{merchant?.distance}</span>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  // ── List variant (default) ─────────────────────────────────────────────────
+  return (
+    <motion.div
+      whileTap={{ scale: 0.98 }}
+      onClick={() => navigate(`/offer/${offerId}`)}
+      className="bg-surface rounded-2xl shadow-card overflow-hidden cursor-pointer"
+    >
+      <div className="flex gap-3 p-3">
+        <div className="relative flex-shrink-0">
+          <img
+            src={offer.image}
+            alt={offer.title}
+            className="w-20 h-20 object-cover rounded-xl"
+            loading="lazy"
+          />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm font-semibold text-text-primary line-clamp-2 flex-1">
+              {offer.title}
+            </p>
+            <motion.button
+              whileTap={{ scale: 0.8 }}
+              onClick={handleSave}
+              className="flex-shrink-0"
+            >
+              {isSaved
+                ? <BookmarkRoundedIcon sx={{ fontSize: 20 }} className="text-primary" />
+                : <BookmarkBorderRoundedIcon sx={{ fontSize: 20 }} className="text-gray-400" />
+              }
+            </motion.button>
+          </div>
+
+          <p className="text-xs text-text-secondary mt-0.5">{merchant?.storeName}</p>
+
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            <span className="bg-primary text-white text-xs font-bold px-2 py-0.5 rounded-lg">
+              {discountLabel}
+            </span>
+            {merchant?.verified && (
+              <span className="flex items-center gap-0.5 text-xs text-green-600">
+                <VerifiedRoundedIcon sx={{ fontSize: 13 }} />
+                Verified
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 mt-1.5">
+            <LocationOnRoundedIcon sx={{ fontSize: 13 }} className="text-text-secondary" />
+            <span className="text-xs text-text-secondary">{merchant?.distance}</span>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+export default OfferCard;
