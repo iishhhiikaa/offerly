@@ -103,19 +103,32 @@ export const getSavedOffers = async (req, res) => {
 
 export const toggleSavedOffer = async (req, res) => {
   const offerId = req.params.offerId;
+  
+  // 1. Bug Fix: Ensure savedOffers array exists (for older users created before this schema)
+  if (!req.user.savedOffers) {
+    req.user.savedOffers = [];
+  }
+
   const existingIndex = req.user.savedOffers.findIndex((item) => item.toString() === offerId);
+  let isSaved = false;
 
   if (existingIndex >= 0) {
+    // Already saved -> Remove it
     req.user.savedOffers.splice(existingIndex, 1);
+    await Offer.findByIdAndUpdate(offerId, { $inc: { saves: -1 } }).catch(console.error);
+    isSaved = false;
   } else {
+    // Not saved -> Add it
     req.user.savedOffers.push(offerId);
+    await Offer.findByIdAndUpdate(offerId, { $inc: { saves: 1 } }).catch(console.error);
+    isSaved = true;
   }
 
   await req.user.save();
 
   return res.status(200).json({
     savedOfferIds: req.user.savedOffers.map((item) => item.toString()),
-    isSaved: existingIndex < 0,
+    isSaved: isSaved,
   });
 };
 

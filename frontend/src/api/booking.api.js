@@ -21,4 +21,19 @@ export const bookingAPI = {
   verifyQR: async (qrToken) => {
     return axiosInstance.post(API_ENDPOINTS.VERIFY_QR, { qrToken });
   },
+
+  // Preview QR without fulfilling (merchant)
+  previewQR: async (qrToken) => {
+    return axiosInstance.post(`${API_ENDPOINTS.CREATE_REDEMPTION}/preview-qr`, { qrToken });
+  },
+
+  // Get merchant redemptions
+  getMerchantRedemptions: async () => {
+    return axiosInstance.get(`${API_ENDPOINTS.CREATE_REDEMPTION}/merchant`);
+  },
+
+  // Lookup by Pass ID (merchant manual entry)
+  lookupByPassId: async (internalId) => {
+    return axiosInstance.get(`${API_ENDPOINTS.CREATE_REDEMPTION}/lookup/${internalId}`);
+  },
 };

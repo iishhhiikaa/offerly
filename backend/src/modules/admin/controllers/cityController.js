@@ -1,18 +1,53 @@
+import Merchant from '../../merchant/models/Merchant.js';
 import City from '../models/City.js';
+
+const toTitleCase = (value = '') =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 
 // @desc    Get all active cities (public)
 // @route   GET /api/cities
 // @access  Public
 export const getCities = async (req, res) => {
   try {
-    const cities = await City.find({ status: 'active' })
-      .select('name status coordinates zones')
-      .sort({ name: 1 });
+    const [cities, merchantCities] = await Promise.all([
+      City.find({ status: 'active' })
+        .select('name status coordinates zones')
+        .lean(),
+      Merchant.find({ status: 'approved', city: { $exists: true, $ne: '' } })
+        .select('city')
+        .lean(),
+    ]);
+
+    const mergedCities = new Map(
+      cities.map((city) => [city.name.trim().toLowerCase(), city]),
+    );
+
+    for (const merchant of merchantCities) {
+      const normalizedKey = merchant.city.trim().toLowerCase();
+      if (mergedCities.has(normalizedKey)) {
+        continue;
+      }
+
+      mergedCities.set(normalizedKey, {
+        _id: `merchant-city-${normalizedKey}`,
+        name: toTitleCase(merchant.city),
+        status: 'active',
+        coordinates: { lat: 0, lng: 0 },
+        zones: [],
+      });
+    }
+
+    const cityList = [...mergedCities.values()].sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
     
     return res.status(200).json({
       success: true,
-      count: cities.length,
-      cities
+      count: cityList.length,
+      cities: cityList,
     });
   } catch (error) {
     console.error('Get cities error:', error);

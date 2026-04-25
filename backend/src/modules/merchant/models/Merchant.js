@@ -240,5 +240,7 @@ merchantSchema.index({ totalRedemptions: -1 });
 merchantSchema.index({ status: 1, createdAt: -1 });
 merchantSchema.index({ phone: 1 });
 merchantSchema.index({ coordinates: '2d' }); // For geospatial queries
+merchantSchema.index({ status: 1, city: 1, avgRating: -1 });
+merchantSchema.index({ status: 1, city: 1, totalRedemptions: -1 });
 
 export default mongoose.model('Merchant', merchantSchema);

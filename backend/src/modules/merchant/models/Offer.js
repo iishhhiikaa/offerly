@@ -130,5 +130,9 @@ offerSchema.index({ merchantId: 1, status: 1 });
 offerSchema.index({ category: 1, status: 1 });
 offerSchema.index({ createdAt: -1 });
 offerSchema.index({ status: 1, validTo: 1 });
+offerSchema.index({ status: 1, merchantId: 1, createdAt: -1 });
+offerSchema.index({ status: 1, isTrending: 1, createdAt: -1 });
+offerSchema.index({ status: 1, isNew: 1, createdAt: -1 });
+offerSchema.index({ status: 1, saves: -1, createdAt: -1 });
 
 export default mongoose.model('Offer', offerSchema);

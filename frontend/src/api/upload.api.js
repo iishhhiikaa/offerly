@@ -13,10 +13,10 @@ export const uploadAPI = {
         }
       });
 
-      return response.data;
+      return response;
     } catch (error) {
       console.error('Upload image error:', error);
-      throw error.response?.data || error;
+      throw error;
     }
   },
 
@@ -26,7 +26,7 @@ export const uploadAPI = {
       const formData = new FormData();
       
       // Append all files
-      files.forEach((file, index) => {
+      files.forEach((file) => {
         formData.append(`images`, file);
       });
 
@@ -36,10 +36,10 @@ export const uploadAPI = {
         }
       });
 
-      return response.data;
+      return response;
     } catch (error) {
       console.error('Upload images error:', error);
-      throw error.response?.data || error;
+      throw error;
     }
   },
 

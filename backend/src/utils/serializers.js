@@ -49,6 +49,7 @@ export const serializeCity = (city) => ({
 
 export const serializeMerchant = (merchant) => ({
   id: objectIdToString(merchant?._id ?? merchant?.id),
+  _id: objectIdToString(merchant?._id ?? merchant?.id),
   ownerName: merchant?.ownerName || '',
   storeName: merchant?.storeName || '',
   category: merchant?.category || '',
@@ -79,10 +80,19 @@ export const serializeMerchant = (merchant) => ({
   createdAt: merchant?.createdAt || null,
   updatedAt: merchant?.updatedAt || null,
   documents: merchant?.documents || [],
+  onboardingStep: merchant?.onboardingStep ?? 0,
+  businessHours: merchant?.businessHours || null,
+  bankDetails: merchant?.bankDetails || null,
+  businessEmail: merchant?.businessEmail || '',
+  businessPhone: merchant?.businessPhone || '',
+  state: merchant?.state || '',
+  pincode: merchant?.pincode || '',
+  gstNumber: merchant?.gstNumber || '',
 });
 
 export const serializeOffer = (offer) => ({
   id: objectIdToString(offer?._id ?? offer?.id),
+  _id: objectIdToString(offer?._id ?? offer?.id),
   merchantId: objectIdToString(offer?.merchantId),
   
   // Offer type and linking (NEW)
@@ -121,7 +131,11 @@ export const serializeOffer = (offer) => ({
   status: offer?.status || 'active',
   impressions: offer?.impressions || 0,
   saves: offer?.saves || 0,
-  terms: offer?.terms || [],
+  terms: Array.isArray(offer?.terms)
+    ? offer.terms
+    : (typeof offer?.terms === 'string' && offer.terms.trim()
+        ? [offer.terms.trim()]
+        : []),
   category: offer?.category || '',
   isTrending: Boolean(offer?.isTrending),
   isNew: Boolean(offer?.isNew),
@@ -131,6 +145,7 @@ export const serializeOffer = (offer) => ({
 
 export const serializeProduct = (product) => ({
   id: objectIdToString(product?._id ?? product?.id),
+  _id: objectIdToString(product?._id ?? product?.id),
   merchantId: objectIdToString(product?.merchantId),
   categoryType: product?.categoryType || 'product_based',
   category: product?.category || 'General',

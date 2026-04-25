@@ -10,7 +10,7 @@ import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import toast from 'react-hot-toast';
 
-const AdRequestManagement = () => {
+const PromotionRequest = () => {
   const [ads, setAds] = useState([]);
   const [isSlideOverOpen, setIsSlideOverOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -219,4 +219,4 @@ const AdRequestManagement = () => {
   );
 };
 
-export default AdRequestManagement;
+export default PromotionRequest;

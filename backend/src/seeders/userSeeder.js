@@ -31,8 +31,8 @@ const users = [
 const admins = [
   {
     name: 'Super Admin',
-    email: 'admin@offerly.in',
-    password: 'offerly123',
+    email: process.env.ADMIN_DEFAULT_EMAIL || 'admin@offerly.in',
+    password: process.env.ADMIN_DEFAULT_PASSWORD || 'offerly123',
     role: 'admin',
     status: 'active'
   }

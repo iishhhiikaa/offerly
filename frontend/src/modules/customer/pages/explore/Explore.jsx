@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useMemo, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded';
 import ViewListRoundedIcon from '@mui/icons-material/ViewListRounded';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
@@ -14,71 +14,78 @@ import OfferCard from '../../components/ui/OfferCard';
 import PageTransition from '../../components/ui/PageTransition';
 import { useApp } from '../../context/AppContext';
 
+/**
+ * Custom hook for debounced value
+ */
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  return debouncedValue;
+}
+
 const Explore = () => {
-  const navigate = useNavigate();
-  const { selectedCity, selectedCategory, setSelectedCategory } = useApp();
-  
+  const { user, selectedCity, selectedCategory, setSelectedCategory } = useApp();
   const [viewMode, setViewMode] = useState('list');
-  const [offers, setOffers] = useState([]);
-  const [categories, setCategories] = useState(['All']);
   const [searchText, setSearchText] = useState('');
-  const [currentCityZones, setCurrentCityZones] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [allCities, setAllCities] = useState([]);
+  const cityFilter = selectedCity !== 'Select City' ? selectedCity : (user?.city || undefined);
+  
+  // Use debounced search text to trigger queries to avoid network flood
+  const debouncedSearch = useDebounce(searchText, 500);
 
-  // 1. Initial Load (Categories & Cities)
-  useEffect(() => {
-    const loadBasics = async () => {
-      try {
-        const [catRes, cityRes] = await Promise.all([
-          categoryAPI.getAll(),
-          cityAPI.getAll()
-        ]);
-        
-        const categoryNames = catRes.categories.map(c => c.name);
-        setCategories(['All', ...categoryNames]);
-        setAllCities(cityRes.cities || []);
-      } catch (error) {
-        console.error('Failed to load basics:', error);
+  // 1. Fetch Categories and Cities (Static-ish data)
+  const { data: basics } = useQuery({
+    queryKey: ['basics'],
+    queryFn: async () => {
+      const [catRes, cityRes] = await Promise.all([
+        categoryAPI.getAll(),
+        cityAPI.getAll()
+      ]);
+      return {
+        categories: ['All', ...catRes.categories.map(c => c.name)],
+        allCities: cityRes.cities || []
+      };
+    },
+    staleTime: 1000 * 60 * 60, // 1 hour stale time for categories/cities
+  });
+
+  const categories = basics?.categories || ['All'];
+  const allCities = basics?.allCities || [];
+
+  // 2. Fetch Offers based on filters
+  const { data: offersData, isLoading: isOffersLoading } = useQuery({
+    queryKey: ['offers', cityFilter || 'no-city', selectedCategory, debouncedSearch],
+    queryFn: async () => {
+      if (!cityFilter) {
+        return [];
       }
-    };
-    loadBasics();
-  }, []);
 
-  // 2. Filter-based Data Load
-  useEffect(() => {
-    const loadOffers = async () => {
-      setIsLoading(true);
-      try {
-        const params = {
-          status: 'active',
-          city: selectedCity !== 'Select City' ? selectedCity : undefined,
-          category: selectedCategory !== 'All' ? selectedCategory : undefined,
-          search: searchText.trim() || undefined
-        };
+      const params = {
+        status: 'active',
+        city: cityFilter,
+        category: selectedCategory !== 'All' ? selectedCategory : undefined,
+        search: debouncedSearch.trim() || undefined
+      };
+      const response = await offerAPI.getAll(params);
+      return response.offers || [];
+    },
+    // Only keep previous data while new data is loading to avoid flickering
+    keepPreviousData: true,
+  });
 
-        const response = await offerAPI.getAll(params);
-        setOffers(response.offers || []);
-        
-        // Load zones for current city from our local cache of all cities
-        const cityObj = allCities.find(c => c.name === selectedCity);
-        setCurrentCityZones(cityObj?.zones || []);
+  const offers = offersData || [];
 
-      } catch (error) {
-        console.error('Failed to load offers:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    // Debounce search text if needed, but for now simple fetch
-    const timeout = setTimeout(loadOffers, searchText ? 500 : 0);
-    return () => clearTimeout(timeout);
-  }, [selectedCategory, selectedCity, searchText, allCities]);
-
-  // Derived states
-  const trendingOffers = offers.filter((o) => o.isTrending);
-  const newOffers = offers.filter((o) => o.isNew);
+  // 3. Derived states (Memoized to prevent lag during typing)
+  const trendingOffers = useMemo(() => offers.filter((o) => o.isTrending), [offers]);
+  const newOffers = useMemo(() => offers.filter((o) => o.isNew), [offers]);
+  
+  const currentCityZones = useMemo(() => {
+    const cityName = cityFilter || selectedCity;
+    const cityObj = allCities.find(c => c.name === cityName);
+    return cityObj?.zones || [];
+  }, [allCities, cityFilter, selectedCity]);
 
   return (
     <PageTransition>
@@ -119,7 +126,7 @@ const Explore = () => {
         {/* View toggle + count */}
         <div className="flex items-center justify-between px-1">
           <p className="text-[11px] text-text-secondary font-bold uppercase tracking-wider">
-            {isLoading ? 'Searching...' : `${offers.length} offers in ${selectedCity}`}
+            {isOffersLoading ? 'Searching...' : `${offers.length} offers in ${cityFilter || 'Select City'}`}
           </p>
           <div className="flex items-center gap-1 bg-surface-variant/30 rounded-xl border border-border p-1">
             <button
@@ -138,7 +145,7 @@ const Explore = () => {
         </div>
 
         {/* Loader Skeletons */}
-        {isLoading && (
+        {isOffersLoading && !offers.length && (
           <div className="space-y-4 pt-2">
             {[1, 2, 3].map(i => (
               <div key={i} className="h-28 bg-gray-100 rounded-2xl animate-pulse" />
@@ -147,7 +154,7 @@ const Explore = () => {
         )}
 
         {/* Content sections */}
-        {!isLoading && (
+        {(!isOffersLoading || (offers.length > 0)) && (
           <>
             {/* Trending section */}
             {trendingOffers.length > 0 && !searchText && (
@@ -194,13 +201,15 @@ const Explore = () => {
             )}
 
             {/* Empty State */}
-            {offers.length === 0 && (
+            {offers.length === 0 && !isOffersLoading && (
               <div className="flex flex-col items-center py-16 text-center animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div className="w-20 h-20 bg-primary-light/30 rounded-full flex items-center justify-center mb-4">
                   <SearchRoundedIcon sx={{ fontSize: 40 }} className="text-primary/40" />
                 </div>
                 <h3 className="font-bold text-text-primary mb-1">No offers found</h3>
-                <p className="text-xs text-text-secondary px-8">We couldn't find any offers matching your criteria in {selectedCity}. Try a different city or category!</p>
+                <p className="text-xs text-text-secondary px-8">
+                  We couldn't find any offers matching your criteria in {cityFilter || 'your city'}. Try a different city or category!
+                </p>
                 <button 
                   onClick={() => { setSearchText(''); setSelectedCategory('All'); }}
                   className="mt-6 text-xs font-bold text-primary bg-primary/5 px-4 py-2 rounded-full active:scale-95 transition-transform"
@@ -213,7 +222,7 @@ const Explore = () => {
         )}
 
         {/* Browse by area */}
-        {!searchText && !isLoading && currentCityZones.length > 0 && (
+        {!searchText && !isOffersLoading && currentCityZones.length > 0 && (
           <section className="pt-4">
             <div className="flex items-center justify-between mb-3 px-1">
               <h2 className="text-sm font-bold text-text-primary uppercase tracking-tight">Browse by Area</h2>

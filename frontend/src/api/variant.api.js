@@ -5,10 +5,10 @@ export const variantAPI = {
   getByProduct: async (productId) => {
     try {
       const response = await axios.get(`/variants/products/${productId}/variants`);
-      return response.data;
+      return response;
     } catch (error) {
       console.error('Get variants error:', error);
-      throw error.response?.data || error;
+      throw error;
     }
   },
 
@@ -16,10 +16,10 @@ export const variantAPI = {
   create: async (productId, data) => {
     try {
       const response = await axios.post(`/variants/products/${productId}/variants`, data);
-      return response.data;
+      return response;
     } catch (error) {
       console.error('Create variant error:', error);
-      throw error.response?.data || error;
+      throw error;
     }
   },
 
@@ -27,10 +27,10 @@ export const variantAPI = {
   update: async (productId, variantId, data) => {
     try {
       const response = await axios.put(`/variants/products/${productId}/variants/${variantId}`, data);
-      return response.data;
+      return response;
     } catch (error) {
       console.error('Update variant error:', error);
-      throw error.response?.data || error;
+      throw error;
     }
   },
 
@@ -38,10 +38,10 @@ export const variantAPI = {
   delete: async (productId, variantId) => {
     try {
       const response = await axios.delete(`/variants/products/${productId}/variants/${variantId}`);
-      return response.data;
+      return response;
     } catch (error) {
       console.error('Delete variant error:', error);
-      throw error.response?.data || error;
+      throw error;
     }
   }
 };

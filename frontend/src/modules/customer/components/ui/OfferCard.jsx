@@ -9,10 +9,16 @@ import { userAPI } from '../../../../api/user.api';
 import { useApp } from '../../context/AppContext';
 import toast from 'react-hot-toast';
 
+import { getOptimizedImageUrl } from '../../../../utils/cloudinaryUtils';
+
 const OfferCard = ({ offer, variant = 'list', onSaveToggle }) => {
   const navigate = useNavigate();
-  const { user, isLoggedIn } = useApp();
+  const { user, isLoggedIn, refreshUser } = useApp();
   const offerId = offer._id || offer.id;
+  
+  // Optimize image URL
+  const optimizedImage = getOptimizedImageUrl(offer.image, { width: 400, height: 300 });
+
   const [isSaved, setIsSaved] = useState(() => {
     // Check if offer is in user's savedOffers
     return user?.savedOffers?.includes(offerId) || false;
@@ -37,6 +43,10 @@ const OfferCard = ({ offer, variant = 'list', onSaveToggle }) => {
     try {
       const response = await userAPI.toggleSavedOffer(offerId);
       setIsSaved(response.isSaved);
+      
+      // Sync global user state immediately to avoid desync on navigation
+      await refreshUser();
+      
       toast.success(response.isSaved ? 'Offer saved!' : 'Offer removed', {
         icon: response.isSaved ? '🔖' : '✅',
         duration: 2000,
@@ -63,11 +73,11 @@ const OfferCard = ({ offer, variant = 'list', onSaveToggle }) => {
       <motion.div
         whileTap={{ scale: 0.97 }}
         onClick={() => navigate(`/offer/${offerId}`)}
-        className="bg-surface rounded-2xl shadow-card overflow-hidden cursor-pointer w-full max-w-[280px] mx-auto"
+        className="bg-surface rounded-xl shadow-card overflow-hidden cursor-pointer w-full max-w-[280px] mx-auto"
       >
         <div className="relative aspect-[4/3] overflow-hidden">
           <img
-            src={offer.image}
+            src={optimizedImage}
             alt={offer.title}
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
             loading="lazy"
@@ -103,12 +113,12 @@ const OfferCard = ({ offer, variant = 'list', onSaveToggle }) => {
     <motion.div
       whileTap={{ scale: 0.98 }}
       onClick={() => navigate(`/offer/${offerId}`)}
-      className="bg-surface rounded-2xl shadow-card overflow-hidden cursor-pointer"
+      className="bg-surface rounded-xl shadow-card overflow-hidden cursor-pointer"
     >
       <div className="flex gap-3 p-3">
         <div className="relative flex-shrink-0">
           <img
-            src={offer.image}
+            src={optimizedImage}
             alt={offer.title}
             className="w-20 h-20 object-cover rounded-xl"
             loading="lazy"

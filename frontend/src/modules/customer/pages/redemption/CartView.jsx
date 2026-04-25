@@ -8,25 +8,61 @@ import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import QrCode2RoundedIcon from '@mui/icons-material/QrCode2Rounded';
+import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import RemoveRoundedIcon from '@mui/icons-material/RemoveRounded';
 
-import { getCart, getMerchantById, getAuthUser } from '../../data/localStorageUtils';
+import { cartAPI } from '../../../../api/cart.api';
+import { merchantAPI } from '../../../../api/merchant.api';
+import { useApp } from '../../context/AppContext';
 import PageTransition from '../../components/ui/PageTransition';
 
 const CartView = () => {
   const navigate = useNavigate();
+  const { user } = useApp();
   const [cart, setCart] = useState(null);
   const [merchant, setMerchant] = useState(null);
-  const [user, setUser] = useState(null);
+
+  const loadCart = async () => {
+    try {
+      const cartRes = await cartAPI.getCart();
+      const backendCart = cartRes.data;
+      
+      if (backendCart && backendCart.merchantId && backendCart.items && backendCart.items.length > 0) {
+        setCart(backendCart);
+        
+        const merchantId = backendCart.merchantId._id || backendCart.merchantId;
+        const merchantRes = await merchantAPI.getById(merchantId);
+        if (merchantRes && merchantRes.merchant) {
+          setMerchant(merchantRes.merchant);
+        }
+      } else {
+        setCart(null);
+      }
+    } catch (error) {
+      console.error('Failed to load cart:', error);
+      setCart(null);
+    }
+  };
 
   useEffect(() => {
-    const currentCart = getCart();
-    setUser(getAuthUser());
-    
-    if (currentCart && currentCart.merchantId && currentCart.items.length > 0) {
-      setCart(currentCart);
-      setMerchant(getMerchantById(currentCart.merchantId));
-    }
+    loadCart();
   }, []);
+
+  const handleUpdateQty = async (product, newQty) => {
+    if (!merchant) return;
+    try {
+      const productId = product._id || product.id;
+      const response = await cartAPI.updateCart(merchant._id || merchant.id, productId, newQty);
+      if (response && response.data) {
+        setCart(response.data);
+      } else {
+        setCart(null);
+      }
+      loadCart(); // Refresh merchant details if needed
+    } catch (error) {
+      console.error('Failed to update cart:', error);
+    }
+  };
 
   if (!cart || !merchant) {
     return (
@@ -62,18 +98,7 @@ const CartView = () => {
   const totalDiscount = totalBasePrice - totalOfferPrice;
 
   const handleProceed = () => {
-     // Prepare temporary cart draft data in memory to pass to QrScreen
-     // To mimic user requirements, we'll navigate to /redeem/draft
-     navigate('/redeem/draft', { 
-       state: {
-         isDraft: true,
-         reqData: {
-           items: cart.items,
-           totals: { base: totalBasePrice, discount: totalDiscount, final: totalOfferPrice }
-         },
-         merchantId: merchant.id
-       }
-     });
+     navigate('/redeem/draft');
   };
 
   return (
@@ -84,9 +109,14 @@ const CartView = () => {
           <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-gray-700 bg-gray-50 rounded-full">
             <ArrowBackRoundedIcon />
           </button>
-          <div className="ml-3 flex-1">
-            <h1 className="text-lg font-bold text-gray-900">Review Booking</h1>
-            <p className="text-xs font-semibold text-primary">{merchant.storeName}</p>
+          <div className="ml-3 flex-1 flex items-center justify-between">
+            <div>
+              <h1 className="text-lg font-bold text-gray-900">Review Booking</h1>
+              <p className="text-xs font-semibold text-primary">{merchant.storeName}</p>
+            </div>
+            {merchant.logo && (
+              <img src={merchant.logo} alt="" className="w-8 h-8 rounded-full shadow-sm object-cover border border-gray-100" />
+            )}
           </div>
         </div>
 
@@ -117,22 +147,45 @@ const CartView = () => {
              </div>
              
              <div className="space-y-4">
-               {cart.items.map((item, idx) => (
+               {cart.items.map((item, idx) => {
+                 const product = item.product;
+                 const productPrice = product.offerPrice || 0;
+                 const basePrice = product.price || 0;
+                 return (
                  <div key={idx} className="flex justify-between items-start gap-4">
                     <div className="flex-1">
-                      <p className="font-bold text-gray-800">{item.product.name}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">Qty: {item.qty} × ₹{item.product.offerPrice}</p>
+                      <p className="font-bold text-gray-800">{product.name}</p>
+                      <div className="flex items-center gap-3 mt-2">
+                        <div className="flex items-center bg-gray-100 rounded-lg overflow-hidden border border-gray-200">
+                          <motion.button 
+                            whileTap={{backgroundColor:'rgba(0,0,0,0.05)'}} 
+                            className="px-2 py-1 text-gray-700"
+                            onClick={() => handleUpdateQty(product, item.qty - 1)}
+                          >
+                            <RemoveRoundedIcon sx={{fontSize: 16}} />
+                          </motion.button>
+                          <span className="px-2 font-bold w-6 text-center text-sm">{item.qty}</span>
+                          <motion.button 
+                            whileTap={{backgroundColor:'rgba(0,0,0,0.05)'}} 
+                            className="px-2 py-1 text-gray-700"
+                            onClick={() => handleUpdateQty(product, item.qty + 1)}
+                          >
+                            <AddRoundedIcon sx={{fontSize: 16}} />
+                          </motion.button>
+                        </div>
+                      </div>
                     </div>
                     <div className="text-right flex flex-col items-end">
-                      <p className="font-bold text-gray-900">₹{item.product.offerPrice * item.qty}</p>
-                      {item.product.price > item.product.offerPrice && (
+                      <p className="font-bold text-gray-900">₹{productPrice * item.qty}</p>
+                      {basePrice > productPrice && (
                          <p className="text-xs text-green-600 font-bold bg-green-50 px-1.5 py-0.5 rounded mt-1">
-                           Save ₹{(item.product.price - item.product.offerPrice) * item.qty}
+                           Save ₹{(basePrice - productPrice) * item.qty}
                          </p>
                       )}
                     </div>
                  </div>
-               ))}
+                 );
+               })}
              </div>
           </div>
 
@@ -169,7 +222,7 @@ const CartView = () => {
         </div>
 
         {/* Footer */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 shadow-[0_-4px_15px_rgba(0,0,0,0.05)] z-20">
+        <div className="fixed bottom-20 lg:bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 shadow-[0_-4px_15px_rgba(0,0,0,0.05)] z-20">
            <div className="max-w-[1200px] mx-auto">
               <motion.button
                 whileTap={{scale: 0.97}}

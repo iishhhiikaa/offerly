@@ -14,7 +14,7 @@ const StoreCard = ({ merchant, offerCount, variant = 'row' }) => {
       <motion.div
         whileTap={{ scale: 0.98 }}
         onClick={() => navigate(`/store/${merchantId}`)}
-        className="flex items-center gap-3 bg-surface rounded-2xl shadow-card p-3 cursor-pointer"
+        className="flex items-center gap-3 bg-surface rounded-xl shadow-card p-3 cursor-pointer"
       >
         {/* Store logo / category icon */}
         <div className="w-14 h-14 rounded-xl overflow-hidden bg-primary-light flex-shrink-0">
@@ -61,7 +61,7 @@ const StoreCard = ({ merchant, offerCount, variant = 'row' }) => {
     <motion.div
       whileTap={{ scale: 0.97 }}
       onClick={() => navigate(`/store/${merchantId}`)}
-      className="bg-surface rounded-2xl shadow-card overflow-hidden cursor-pointer w-44 flex-shrink-0"
+      className="bg-surface rounded-xl shadow-card overflow-hidden cursor-pointer w-44 flex-shrink-0"
     >
       <div className="h-24 relative">
         <img

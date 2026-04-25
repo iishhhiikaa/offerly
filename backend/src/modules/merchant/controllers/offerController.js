@@ -1,9 +1,14 @@
 import Plan from "../../admin/models/Plan.js";
+import AdRequest from "../../admin/models/AdRequest.js";
+import Redemption from "../../booking/models/Redemption.js";
 import MerchantSubscription from "../../payment/models/MerchantSubscription.js";
 import { serializeOffer, serializeMerchant } from "../../../utils/serializers.js";
 import { calculateDistance, formatDistance } from "../../../utils/distance.js";
+import { getFeedCache, setFeedCache, invalidateFeedCache } from "../../../utils/feedCache.js";
 import Merchant from "../models/Merchant.js";
 import Offer from "../models/Offer.js";
+
+const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const getOwnedMerchant = async (userId) => {
   return Merchant.findById(userId);
@@ -41,6 +46,481 @@ const ensureOfferAllowance = async (merchant) => {
   if (offersCount >= maxOffers) {
     throw new Error("Current subscription plan offer limit reached");
   }
+};
+
+const FEED_DEFAULTS = {
+  trendingLimit: 5,
+  nearYouLimit: 4,
+  storesLimit: 3,
+  recommendedLimit: 6,
+  bannersLimit: 5,
+};
+
+const normalizeCity = (value = "") => value.trim().toLowerCase();
+
+const parseCoordinate = (value) => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const toObjectIdString = (value) => {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return String(value._id || value);
+};
+
+const getRecencyScore = (createdAt) => {
+  if (!createdAt) {
+    return 0;
+  }
+
+  const ageMs = Date.now() - new Date(createdAt).getTime();
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  return Math.max(0, 30 - ageDays);
+};
+
+const resolveFeedCity = (req) => {
+  const queryCity =
+    typeof req.query.city === "string" && req.query.city.trim() ? req.query.city.trim() : "";
+  if (queryCity) {
+    return queryCity;
+  }
+
+  const profileCity =
+    typeof req.user?.city === "string" && req.user.city.trim() ? req.user.city.trim() : "";
+  if (profileCity) {
+    return profileCity;
+  }
+
+  return "";
+};
+
+const parseLimit = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(parsed, 1), 20);
+};
+
+const toFeedOffer = ({ offer, merchant, distanceKm }) => {
+  const distanceLabel = distanceKm === null ? "N/A" : formatDistance(distanceKm);
+  const merchantPayload = serializeMerchant({
+    ...merchant,
+    distance: distanceLabel,
+  });
+
+  const serialized = serializeOffer({
+    ...offer,
+    merchantName: merchant.businessName || merchant.storeName,
+    merchantId: merchant._id,
+  });
+
+  serialized.merchant = merchantPayload;
+  return serialized;
+};
+
+const pickUniqueOffers = (rankedItems, seenIds, limit) => {
+  const picked = [];
+
+  for (const item of rankedItems) {
+    if (seenIds.has(item.id)) {
+      continue;
+    }
+
+    seenIds.add(item.id);
+    picked.push(item.offer);
+
+    if (picked.length >= limit) {
+      break;
+    }
+  }
+
+  return picked;
+};
+
+const buildAffinityWeights = async (user) => {
+  if (!user || user.role !== "customer") {
+    return { weights: {}, hash: "anon" };
+  }
+
+  const savedOfferIds = Array.isArray(user.savedOffers)
+    ? user.savedOffers.map((item) => toObjectIdString(item)).filter(Boolean)
+    : [];
+
+  const redemptionRows = await Redemption.find({
+    customerId: user._id,
+    status: "completed",
+    offerId: { $ne: null },
+  })
+    .select("offerId")
+    .sort({ createdAt: -1 })
+    .limit(100)
+    .lean();
+
+  const redeemedOfferIds = redemptionRows
+    .map((row) => toObjectIdString(row.offerId))
+    .filter(Boolean);
+
+  const candidateOfferIds = [...new Set([...savedOfferIds, ...redeemedOfferIds])];
+  if (!candidateOfferIds.length) {
+    return { weights: {}, hash: `${toObjectIdString(user._id)}:none` };
+  }
+
+  const candidateOffers = await Offer.find({ _id: { $in: candidateOfferIds } })
+    .select("_id category")
+    .lean();
+
+  const categoryByOfferId = new Map(
+    candidateOffers.map((offer) => [toObjectIdString(offer._id), String(offer.category || "").trim()]),
+  );
+
+  const weights = {};
+  for (const savedId of savedOfferIds) {
+    const categoryKey = normalizeCity(categoryByOfferId.get(savedId) || "");
+    if (!categoryKey) {
+      continue;
+    }
+    weights[categoryKey] = (weights[categoryKey] || 0) + 2;
+  }
+
+  for (const redeemedId of redeemedOfferIds) {
+    const categoryKey = normalizeCity(categoryByOfferId.get(redeemedId) || "");
+    if (!categoryKey) {
+      continue;
+    }
+    weights[categoryKey] = (weights[categoryKey] || 0) + 3;
+  }
+
+  const hashSource = Object.entries(weights)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([category, score]) => `${category}:${score}`)
+    .join("|");
+
+  return {
+    weights,
+    hash: `${toObjectIdString(user._id)}:${hashSource || "none"}`,
+  };
+};
+
+export const getOffersFeed = async (req, res) => {
+  const requestStartedAt = Date.now();
+  const selectedCity = resolveFeedCity(req);
+
+  if (!selectedCity) {
+    return res.status(400).json({
+      message: "City is required to load your personalized feed.",
+      code: "CITY_REQUIRED",
+      cityRequired: true,
+    });
+  }
+
+  const normalizedCityKey = normalizeCity(selectedCity);
+  const userLat = parseCoordinate(req.query.userLat);
+  const userLng = parseCoordinate(req.query.userLng);
+
+  const limitConfig = {
+    trendingLimit: parseLimit(req.query.trendingLimit, FEED_DEFAULTS.trendingLimit),
+    nearYouLimit: parseLimit(req.query.nearYouLimit, FEED_DEFAULTS.nearYouLimit),
+    storesLimit: parseLimit(req.query.storesLimit, FEED_DEFAULTS.storesLimit),
+    recommendedLimit: parseLimit(req.query.recommendedLimit, FEED_DEFAULTS.recommendedLimit),
+    bannersLimit: parseLimit(req.query.bannersLimit, FEED_DEFAULTS.bannersLimit),
+  };
+
+  const affinity = await buildAffinityWeights(req.user);
+  const coordsKey =
+    userLat !== null && userLng !== null
+      ? `${userLat.toFixed(2)}:${userLng.toFixed(2)}`
+      : "no-coords";
+  const cacheKey = `${normalizedCityKey}|${coordsKey}|${affinity.hash}`;
+  const cachedPayload = getFeedCache(cacheKey);
+
+  if (cachedPayload) {
+    return res.status(200).json({
+      ...cachedPayload,
+      meta: {
+        ...cachedPayload.meta,
+        cache: "hit",
+        durationMs: Date.now() - requestStartedAt,
+      },
+    });
+  }
+
+  const exactCityRegex = new RegExp(`^${escapeRegex(selectedCity)}$`, "i");
+  const fuzzyCityRegex = new RegExp(escapeRegex(selectedCity), "i");
+
+  let cityMerchants = await Merchant.find({
+    status: "approved",
+    city: exactCityRegex,
+  })
+    .select(
+      "_id storeName businessName verified coordinates city totalRedemptions avgRating totalReviews logo coverImage category",
+    )
+    .lean();
+
+  if (!cityMerchants.length) {
+    cityMerchants = await Merchant.find({
+      status: "approved",
+      city: fuzzyCityRegex,
+    })
+      .select(
+        "_id storeName businessName verified coordinates city totalRedemptions avgRating totalReviews logo coverImage category",
+      )
+      .lean();
+  }
+
+  const merchantIds = cityMerchants.map((merchant) => merchant._id);
+  const generatedAt = new Date().toISOString();
+
+  if (!merchantIds.length) {
+    const emptyPayload = {
+      city: selectedCity,
+      generatedAt,
+      buckets: {
+        trendingOffers: [],
+        nearYouOffers: [],
+        mostPopulatedStores: [],
+        recommendedOffers: [],
+      },
+      banners: [],
+      meta: {
+        cache: "miss",
+        cityMerchantCount: 0,
+        activeOfferCount: 0,
+      },
+    };
+
+    setFeedCache(cacheKey, emptyPayload);
+    return res.status(200).json({
+      ...emptyPayload,
+      meta: {
+        ...emptyPayload.meta,
+        durationMs: Date.now() - requestStartedAt,
+      },
+    });
+  }
+
+  const merchantById = new Map(cityMerchants.map((merchant) => [toObjectIdString(merchant._id), merchant]));
+  const now = new Date();
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const [activeOffers, offerRedemptionRows, storeRedemptionRows, approvedAds] = await Promise.all([
+    Offer.find({
+      status: "active",
+      merchantId: { $in: merchantIds },
+      $or: [{ validTo: { $gte: now } }, { validTo: null }],
+    })
+      .select(
+        "_id merchantId offerType productId variantId applyToAllVariants servicePlanId bookingRequired bookingWindowDays title description discountType discountValue validFrom validTo maxRedemptions currentRedemptions image customImage useCustomImage status impressions saves terms category isTrending isNew createdAt updatedAt",
+      )
+      .lean(),
+    Redemption.aggregate([
+      {
+        $match: {
+          status: "completed",
+          createdAt: { $gte: thirtyDaysAgo },
+          merchantId: { $in: merchantIds },
+          offerId: { $ne: null },
+        },
+      },
+      { $group: { _id: "$offerId", count: { $sum: 1 } } },
+    ]),
+    Redemption.aggregate([
+      {
+        $match: {
+          status: "completed",
+          createdAt: { $gte: thirtyDaysAgo },
+          merchantId: { $in: merchantIds },
+        },
+      },
+      { $group: { _id: "$merchantId", count: { $sum: 1 } } },
+    ]),
+    AdRequest.find({
+      status: "approved",
+      merchantId: { $in: merchantIds },
+      $or: [{ expiryAt: null }, { expiryAt: { $gt: now } }],
+    })
+      .select("_id merchantId storeName image")
+      .sort({ createdAt: -1 })
+      .limit(limitConfig.bannersLimit)
+      .lean(),
+  ]);
+
+  const offerRedemptionsById = new Map(
+    offerRedemptionRows.map((item) => [toObjectIdString(item._id), Number(item.count || 0)]),
+  );
+  const storeRedemptionsById = new Map(
+    storeRedemptionRows.map((item) => [toObjectIdString(item._id), Number(item.count || 0)]),
+  );
+
+  const offerCountByMerchantId = {};
+  const rankedOffers = [];
+
+  for (const offer of activeOffers) {
+    const merchant = merchantById.get(toObjectIdString(offer.merchantId));
+    if (!merchant) {
+      continue;
+    }
+
+    const merchantId = toObjectIdString(merchant._id);
+    offerCountByMerchantId[merchantId] = (offerCountByMerchantId[merchantId] || 0) + 1;
+
+    let distanceKm = null;
+    if (
+      userLat !== null &&
+      userLng !== null &&
+      merchant.coordinates &&
+      Number.isFinite(merchant.coordinates.lat) &&
+      Number.isFinite(merchant.coordinates.lng)
+    ) {
+      distanceKm = calculateDistance(userLat, userLng, merchant.coordinates.lat, merchant.coordinates.lng);
+    }
+
+    const offerId = toObjectIdString(offer._id);
+    const redemptions30d = offerRedemptionsById.get(offerId) || 0;
+    const saves = Number(offer.saves || 0);
+    const recencyScore = getRecencyScore(offer.createdAt);
+    const categoryAffinity = affinity.weights[normalizeCity(offer.category || "")] || 0;
+
+    const trendingScore = redemptions30d * 4 + saves * 2 + recencyScore + (offer.isTrending ? 8 : 0);
+    const recommendationScore = categoryAffinity * 6 + redemptions30d * 2 + saves + recencyScore;
+    const nearYouScore =
+      distanceKm === null ? trendingScore : 1000 - Math.min(distanceKm, 1000) + redemptions30d * 1.5;
+
+    rankedOffers.push({
+      id: offerId,
+      offer: toFeedOffer({ offer, merchant, distanceKm }),
+      distanceKm,
+      redemptions30d,
+      recencyScore,
+      trendingScore,
+      recommendationScore,
+      nearYouScore,
+      affinityScore: categoryAffinity,
+      createdAt: offer.createdAt ? new Date(offer.createdAt).getTime() : 0,
+    });
+  }
+
+  const seenOfferIds = new Set();
+
+  const trendingOffers = pickUniqueOffers(
+    [...rankedOffers].sort((left, right) => {
+      if (right.trendingScore !== left.trendingScore) {
+        return right.trendingScore - left.trendingScore;
+      }
+      if (right.redemptions30d !== left.redemptions30d) {
+        return right.redemptions30d - left.redemptions30d;
+      }
+      return right.createdAt - left.createdAt;
+    }),
+    seenOfferIds,
+    limitConfig.trendingLimit,
+  );
+
+  const nearYouOffers = pickUniqueOffers(
+    [...rankedOffers].sort((left, right) => {
+      if (left.distanceKm !== null && right.distanceKm !== null && left.distanceKm !== right.distanceKm) {
+        return left.distanceKm - right.distanceKm;
+      }
+      if (left.distanceKm === null && right.distanceKm !== null) {
+        return 1;
+      }
+      if (left.distanceKm !== null && right.distanceKm === null) {
+        return -1;
+      }
+      if (right.nearYouScore !== left.nearYouScore) {
+        return right.nearYouScore - left.nearYouScore;
+      }
+      return right.createdAt - left.createdAt;
+    }),
+    seenOfferIds,
+    limitConfig.nearYouLimit,
+  );
+
+  const recommendedOffers = pickUniqueOffers(
+    [...rankedOffers].sort((left, right) => {
+      if (right.recommendationScore !== left.recommendationScore) {
+        return right.recommendationScore - left.recommendationScore;
+      }
+      if (right.affinityScore !== left.affinityScore) {
+        return right.affinityScore - left.affinityScore;
+      }
+      return right.createdAt - left.createdAt;
+    }),
+    seenOfferIds,
+    limitConfig.recommendedLimit,
+  );
+
+  const mostPopulatedStores = cityMerchants
+    .map((merchant) => {
+      const merchantId = toObjectIdString(merchant._id);
+      return {
+        merchant,
+        recentRedemptions30d: storeRedemptionsById.get(merchantId) || 0,
+        offerCount: offerCountByMerchantId[merchantId] || 0,
+      };
+    })
+    .sort((left, right) => {
+      if (right.recentRedemptions30d !== left.recentRedemptions30d) {
+        return right.recentRedemptions30d - left.recentRedemptions30d;
+      }
+      if (Number(right.merchant.avgRating || 0) !== Number(left.merchant.avgRating || 0)) {
+        return Number(right.merchant.avgRating || 0) - Number(left.merchant.avgRating || 0);
+      }
+      return Number(right.merchant.totalRedemptions || 0) - Number(left.merchant.totalRedemptions || 0);
+    })
+    .slice(0, limitConfig.storesLimit)
+    .map((item) => ({
+      ...serializeMerchant(item.merchant),
+      recentRedemptions30d: item.recentRedemptions30d,
+      offerCount: item.offerCount,
+    }));
+
+  const adBanners = approvedAds.map((ad) => ({
+    _id: toObjectIdString(ad._id),
+    id: toObjectIdString(ad._id),
+    title: ad.storeName || merchantById.get(toObjectIdString(ad.merchantId))?.storeName || "Sponsored Offer",
+    image: ad.image || "",
+    merchantId: toObjectIdString(ad.merchantId),
+    isAd: true,
+  }));
+
+  const trendingBanners = trendingOffers.map((offer) => ({
+    ...offer,
+    isAd: false,
+  }));
+
+  const payload = {
+    city: selectedCity,
+    generatedAt,
+    buckets: {
+      trendingOffers,
+      nearYouOffers,
+      mostPopulatedStores,
+      recommendedOffers,
+    },
+    banners: [...adBanners, ...trendingBanners].slice(0, limitConfig.bannersLimit),
+    meta: {
+      cache: "miss",
+      cityMerchantCount: cityMerchants.length,
+      activeOfferCount: activeOffers.length,
+    },
+  };
+
+  setFeedCache(cacheKey, payload);
+
+  return res.status(200).json({
+    ...payload,
+    meta: {
+      ...payload.meta,
+      durationMs: Date.now() - requestStartedAt,
+    },
+  });
 };
 
 export const getOffers = async (req, res) => {
@@ -86,6 +566,27 @@ export const getOffers = async (req, res) => {
     query.category = req.query.category;
   }
 
+  // NEW: text search across offer and merchant fields
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  if (search) {
+    const searchRegex = new RegExp(escapeRegex(search), "i");
+    const matchedMerchants = await Merchant.find({
+      status: "approved",
+      $or: [{ storeName: searchRegex }, { category: searchRegex }, { city: searchRegex }],
+    })
+      .select("_id")
+      .lean();
+
+    const matchedMerchantIds = matchedMerchants.map((item) => item._id);
+    query.$or = [
+      { title: searchRegex },
+      { description: searchRegex },
+      { category: searchRegex },
+      { terms: searchRegex },
+      ...(matchedMerchantIds.length ? [{ merchantId: { $in: matchedMerchantIds } }] : []),
+    ];
+  }
+
   // NEW: Filter by isNew
   if (req.query.isNew === 'true') {
     query.isNew = true;
@@ -98,10 +599,23 @@ export const getOffers = async (req, res) => {
 
   // NEW: Filter by city (via merchant)
   if (req.query.city) {
-    const cityMerchants = await Merchant.find({
-      city: req.query.city,
-      status: "approved"
-    }).select("_id").lean();
+    const normalizedCity = req.query.city.trim();
+    let cityMerchants = await Merchant.find({
+      city: new RegExp(`^${escapeRegex(normalizedCity)}$`, "i"),
+      status: "approved",
+    })
+      .select("_id")
+      .lean();
+
+    // Fallback for slightly different city spellings/stored formats.
+    if (!cityMerchants.length) {
+      cityMerchants = await Merchant.find({
+        city: new RegExp(escapeRegex(normalizedCity), "i"),
+        status: "approved",
+      })
+        .select("_id")
+        .lean();
+    }
 
     const cityMerchantIds = cityMerchants.map(m => m._id);
 
@@ -120,21 +634,22 @@ export const getOffers = async (req, res) => {
   const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
   const sortObj = { [sortBy]: sortOrder };
 
-  // NEW: Limit
-  const limit = parseInt(req.query.limit) || 0;
+  // NEW: Pagination & Limit
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Default 50, max 100
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const skip = (page - 1) * limit;
 
   // Execute query with population
-  let offersQuery = Offer.find(query)
+  const offersQuery = Offer.find(query)
     .populate('merchantId', 'storeName businessName verified coordinates city totalRedemptions')
     .populate('productId', 'name price')
     .populate('servicePlanId', 'name price')
-    .sort(sortObj);
-
-  if (limit > 0) {
-    offersQuery = offersQuery.limit(limit);
-  }
+    .sort(sortObj)
+    .skip(skip)
+    .limit(limit);
 
   const offers = await offersQuery;
+  const totalOffers = await Offer.countDocuments(query);
 
   // Parse user coordinates for distance calculation
   const userLat = req.query.userLat ? parseFloat(req.query.userLat) : null;
@@ -185,7 +700,13 @@ export const getOffers = async (req, res) => {
     return offerObj;
   });
 
-  return res.status(200).json({ offers: enrichedOffers.map(serializeOffer) });
+  return res.status(200).json({ 
+    offers: enrichedOffers.map(serializeOffer),
+    total: totalOffers,
+    page: page,
+    limit: limit,
+    totalPages: Math.ceil(totalOffers / limit)
+  });
 };
 
 export const getOfferById = async (req, res) => {
@@ -300,6 +821,16 @@ export const createOffer = async (req, res) => {
     return res.status(400).json({ message: "Service Plan ID is required for service-based offers" });
   }
 
+  const hasMaxRedemptions =
+    req.body.maxRedemptions !== undefined &&
+    req.body.maxRedemptions !== null &&
+    req.body.maxRedemptions !== "";
+  const parsedMaxRedemptions = hasMaxRedemptions ? Number(req.body.maxRedemptions) : 100;
+  const normalizedMaxRedemptions =
+    Number.isFinite(parsedMaxRedemptions) && parsedMaxRedemptions >= 0
+      ? parsedMaxRedemptions
+      : 100;
+
   const offer = await Offer.create({
     merchantId: merchant._id,
     
@@ -319,7 +850,7 @@ export const createOffer = async (req, res) => {
     discountValue: Number(req.body.discountValue || 0),
     validFrom: req.body.validFrom || new Date(),
     validTo: req.body.validTo || null,
-    maxRedemptions: Number(req.body.maxRedemptions || 0),
+    maxRedemptions: normalizedMaxRedemptions,
     currentRedemptions: Number(req.body.currentRedemptions || 0),
     
     // Image handling (ENHANCED - backward compatible)
@@ -331,8 +862,14 @@ export const createOffer = async (req, res) => {
     category: req.body.category || merchant.category || "General",
     isTrending: Boolean(req.body.isTrending),
     isNew: "isNew" in req.body ? Boolean(req.body.isNew) : true,
-    terms: req.body.terms || "",
+    terms: Array.isArray(req.body.terms)
+      ? req.body.terms
+      : (typeof req.body.terms === "string" && req.body.terms.trim()
+          ? [req.body.terms.trim()]
+          : []),
   });
+
+  invalidateFeedCache({ city: merchant.city });
 
   return res.status(201).json({ offer: serializeOffer(offer) });
 };
@@ -359,6 +896,14 @@ export const updateOffer = async (req, res) => {
     if (req.body.offerType === "service" && !req.body.servicePlanId && !offer.servicePlanId) {
       return res.status(400).json({ message: "Service Plan ID is required for service-based offers" });
     }
+  }
+
+  if ("terms" in req.body) {
+    req.body.terms = Array.isArray(req.body.terms)
+      ? req.body.terms
+      : (typeof req.body.terms === "string" && req.body.terms.trim()
+          ? [req.body.terms.trim()]
+          : []);
   }
 
   const editableFields = [
@@ -396,6 +941,7 @@ export const updateOffer = async (req, res) => {
   }
 
   await offer.save();
+  invalidateFeedCache({ city: merchant.city });
 
   return res.status(200).json({ offer: serializeOffer(offer) });
 };
@@ -412,6 +958,8 @@ export const deleteOffer = async (req, res) => {
   if (!offer) {
     return res.status(404).json({ message: "Offer not found" });
   }
+
+  invalidateFeedCache({ city: merchant.city });
 
   return res.status(200).json({ success: true });
 };

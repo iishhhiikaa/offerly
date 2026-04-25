@@ -116,17 +116,42 @@ const MerchantRegistrationFlow = () => {
   const handleKYBSubmit = async (data) => {
     setLoading(true);
     try {
+      console.log('=== SUBMITTING KYB DOCUMENTS ===');
+      console.log('Documents to submit:', data.documents);
+      
+      // Validate documents before submission
+      if (!data.documents || data.documents.length === 0) {
+        toast.error('Please upload all required documents');
+        setLoading(false);
+        return;
+      }
+
+      // Check if all documents have valid URLs
+      const invalidDocs = data.documents.filter(doc => !doc.url || doc.url.trim() === '');
+      if (invalidDocs.length > 0) {
+        console.error('Documents without URLs:', invalidDocs);
+        toast.error('Some documents are missing URLs. Please re-upload them.');
+        setLoading(false);
+        return;
+      }
+
       const response = await merchantAPI.updateKYBDocuments(data);
+      console.log('KYB documents response:', response);
       
       if (response.success) {
         setKybData(data);
         setMerchantData(response.merchant);
         toast.success('Documents uploaded successfully!');
         setCurrentStep(4);
+      } else {
+        toast.error(response.message || 'Failed to upload documents');
       }
     } catch (error) {
       console.error('KYB documents error:', error);
-      toast.error(error.response?.data?.message || 'Failed to upload documents');
+      console.error('Error response:', error.response?.data);
+      
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to upload documents';
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }

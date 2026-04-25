@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
@@ -8,109 +9,103 @@ import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded';
 import toast from 'react-hot-toast';
+
 import AddProductModal from '../components/AddProductModal';
+import ConfirmDialog from '../components/ConfirmDialog';
+import UnifiedOfferBuilder from '../components/UnifiedOfferBuilder';
 import { productAPI } from '../../../api/product.api';
 
+/**
+ * Custom hook for debounced value
+ */
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  return debouncedValue;
+}
+
 const Products = ({ merchant }) => {
-  const [products, setProducts] = useState([]);
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearch = useDebounce(searchQuery, 300);
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  
+  // Unified Flow States
+  const [isUnifiedBuilderOpen, setIsUnifiedBuilderOpen] = useState(false);
+  const [quickOfferProduct, setQuickOfferProduct] = useState(null);
 
-  useEffect(() => {
-    // Merchant object in app can arrive as either {_id} or {id}.
-    // If merchant is not ready yet, stop spinner to avoid infinite loading state.
-    if (!merchant) {
-      setLoading(false);
-      return;
-    }
-
-    refreshProducts();
-  }, [merchant?._id, merchant?.id]);
-
-  const refreshProducts = async () => {
-    try {
-      setLoading(true);
-      console.log('🔄 Fetching products for merchant:', merchant?._id);
-      
+  // 1. Fetch products with React Query
+  const { data: rawProducts, isLoading: loading, error } = useQuery({
+    queryKey: ['merchantProducts', merchant?._id],
+    queryFn: async () => {
       const response = await productAPI.getByMerchant('me');
-      console.log('✅ Products API response:', response);
-      
-      // Handle different response structures
       const productsList = response?.products || response?.data?.products || response || [];
-      console.log('📦 Products list:', productsList);
-      
-      setProducts(Array.isArray(productsList) ? productsList : []);
-    } catch (error) {
-      console.error('❌ Failed to fetch products:', error);
-      console.error('Error details:', {
-        message: error?.message,
-        response: error?.response,
-        data: error?.data
-      });
-      
-      // Show specific error message
-      const errorMsg = error?.message || error?.error || 'Failed to load products';
-      toast.error(errorMsg);
-      setProducts([]);
-    } finally {
-      console.log('✅ Loading complete, setting loading to false');
-      setLoading(false);
-    }
-  };
+      return Array.isArray(productsList) ? productsList : [];
+    },
+    enabled: !!merchant,
+    staleTime: 1000 * 60 * 10, // 10 minutes cache
+    keepPreviousData: true,
+  });
 
-  const handleOpenModal = (product = null) => {
-    setEditingProduct(product);
-    setIsModalOpen(true);
-  };
+  const products = rawProducts || [];
+
+  // 2. Mutations
+  const deleteMutation = useMutation({
+    mutationFn: (id) => productAPI.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['merchantProducts', merchant?._id]);
+      toast.success('Product deleted successfully!');
+    },
+    onError: () => toast.error('Failed to delete product'),
+  });
 
   const handleSaveProduct = async (productData) => {
     try {
       if (editingProduct) {
-        // Update existing product
-        await productAPI.update(editingProduct._id, productData);
+        await productAPI.update(editingProduct._id || editingProduct.id, productData);
         toast.success('Product updated successfully!');
       } else {
-        // Create new product
         await productAPI.create(productData);
         toast.success('Product added successfully!');
       }
-      
-      // Close modal first
       setIsModalOpen(false);
       setEditingProduct(null);
-      
-      // Then refresh products
-      await refreshProducts();
+      queryClient.invalidateQueries(['merchantProducts', merchant?._id]);
     } catch (error) {
-      console.error('Save error:', error);
       const errorMessage = error?.message || error?.error || 'Failed to save product';
       toast.error(errorMessage);
-      throw error; // Re-throw to let modal know save failed
+      throw error;
     }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Are you sure you want to delete this product?')) {
-      try {
-        await productAPI.delete(id);
-        toast.success('Product deleted successfully!');
-        refreshProducts();
-      } catch (error) {
-        console.error('Delete error:', error);
-        toast.error('Failed to delete product');
-      }
+  const confirmDelete = async () => {
+    if (confirmDeleteId) {
+      deleteMutation.mutate(confirmDeleteId);
+      setConfirmDeleteId(null);
     }
   };
 
-  const filtered = products.filter(p => 
-    p.name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filtered = useMemo(() => {
+    return products.filter(p => 
+      p.name?.toLowerCase().includes(debouncedSearch.toLowerCase())
+    );
+  }, [products, debouncedSearch]);
 
   const maxProducts = merchant?.subscription?.plan?.maxProducts || 5;
   const isUnlimited = maxProducts === 999;
   const usagePercent = isUnlimited ? 0 : Math.round((products.length / maxProducts) * 100);
+
+  if (error) return (
+    <div className="p-12 text-center text-rose-500 font-bold bg-rose-50 rounded-xl border border-rose-100">
+      Error loading products. Please try refreshing.
+    </div>
+  );
 
   return (
     <div className="space-y-6 lg:space-y-8">
@@ -120,14 +115,23 @@ const Products = ({ merchant }) => {
           <h1 className="text-3xl font-black text-gray-900 leading-tight">Store Products</h1>
           <p className="text-gray-400 font-medium mt-1">Manage your menu and catalog items</p>
         </div>
-        <button 
-          type="button"
-          onClick={() => handleOpenModal()}
-          className="px-6 py-3 bg-sidebar-dark hover:bg-gray-900 text-white rounded-lg font-bold text-sm transition-all flex items-center gap-2 shadow-lg w-full md:w-auto justify-center"
-        >
-          <AddRoundedIcon sx={{fontSize: 20}} />
-          ADD PRODUCT
-        </button>
+        <div className="flex gap-3">
+          <button 
+            type="button"
+            onClick={() => { setEditingProduct(null); setIsModalOpen(true); }}
+            className="px-6 py-3 bg-white hover:bg-gray-50 border-2 border-gray-200 text-gray-900 rounded-xl font-bold text-sm transition-all flex items-center gap-2 shadow-sm w-full md:w-auto justify-center"
+          >
+            <AddRoundedIcon sx={{fontSize: 20}} />
+            ADD INVENTORY
+          </button>
+          <button 
+            type="button"
+            onClick={() => { setQuickOfferProduct(null); setIsUnifiedBuilderOpen(true); }}
+            className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white rounded-xl font-black text-sm transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/30 w-full md:w-auto justify-center hover:-translate-y-0.5 active:translate-y-0"
+          >
+            🚀 LAUNCH CAMPAIGN
+          </button>
+        </div>
       </div>
 
       {/* Search & Usage Bar */}
@@ -164,7 +168,7 @@ const Products = ({ merchant }) => {
 
       {/* Product Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {loading ? (
+        {loading && !products.length ? (
           <div className="md:col-span-3 py-20 text-center">
             <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mx-auto mb-4" />
             <p className="text-gray-500 font-medium">Loading products...</p>
@@ -180,7 +184,7 @@ const Products = ({ merchant }) => {
             ) : (
               filtered.map((product, idx) => (
                 <motion.div 
-                  key={product._id}
+                  key={product._id || product.id}
                   layout
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -207,14 +211,22 @@ const Products = ({ merchant }) => {
                     <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                       <button 
                         type="button"
-                        onClick={() => handleOpenModal(product)} 
+                        onClick={() => { setQuickOfferProduct(product); setIsUnifiedBuilderOpen(true); }} 
+                        title="Quick Launch Offer"
+                        className="px-3 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-500 hover:text-white transition-all duration-200 border-2 border-emerald-200 hover:border-emerald-500 flex items-center justify-center font-black"
+                      >
+                        ⚡
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => { setEditingProduct(product); setIsModalOpen(true); }} 
                         className="p-2 bg-gray-50 text-gray-500 rounded-lg hover:bg-primary hover:text-white transition-all duration-200 border-2 border-gray-200 hover:border-primary"
                       >
                         <EditRoundedIcon sx={{fontSize: 16}} />
                       </button>
                       <button 
                         type="button"
-                        onClick={() => handleDelete(product._id)} 
+                        onClick={() => setConfirmDeleteId(product._id || product.id)} 
                         className="p-2 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-600 hover:text-white transition-all duration-200 border-2 border-rose-200 hover:border-rose-600"
                       >
                         <DeleteRoundedIcon sx={{fontSize: 16}} />
@@ -224,7 +236,7 @@ const Products = ({ merchant }) => {
 
                   <div className="mt-auto pt-4 border-t-2 border-gray-100 flex items-center justify-between">
                     <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-xl font-medium text-gray-900 leading-none">₹{product.offerPrice}</span>
+                       <span className="font-mono text-xl font-medium text-gray-900 leading-none">₹{product.offerPrice}</span>
                       {product.price > product.offerPrice && (
                         <span className="font-mono text-sm text-gray-400 line-through">₹{product.price}</span>
                       )}
@@ -242,13 +254,32 @@ const Products = ({ merchant }) => {
         )}
       </div>
 
-      {/* Adaptive Product/Service Modal */}
       <AddProductModal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingProduct(null);
+        }}
         merchant={merchant}
         editingProduct={editingProduct}
         onSave={handleSaveProduct}
+      />
+
+      <UnifiedOfferBuilder
+        isOpen={isUnifiedBuilderOpen}
+        onClose={() => setIsUnifiedBuilderOpen(false)}
+        merchant={merchant}
+        preSelectedProduct={quickOfferProduct}
+        onSuccess={() => queryClient.invalidateQueries(['merchantProducts'])}
+      />
+
+      <ConfirmDialog
+        isOpen={!!confirmDeleteId}
+        title="Delete Product"
+        message="Are you sure you want to delete this product? This action cannot be undone."
+        confirmText="Delete Product"
+        onConfirm={confirmDelete}
+        onCancel={() => setConfirmDeleteId(null)}
       />
     </div>
   );

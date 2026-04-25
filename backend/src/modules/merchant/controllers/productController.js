@@ -8,36 +8,21 @@ export const getProductsByMerchant = async (req, res) => {
   try {
     let merchantId;
     const isSelfRequest = req.params.merchantId === 'me' || !req.params.merchantId;
-    
-    console.log('📍 Request params:', req.params);
-    console.log('📍 Request user:', req.user ? {
-      id: req.user._id,
-      role: req.user.role,
-      email: req.user.email
-    } : 'No user');
-    
+
     // Handle 'me' route (authenticated merchant)
     if (isSelfRequest) {
       if (!req.user || !req.user._id) {
-        console.log('❌ Authentication failed - no user in request');
         return res.status(401).json({
           success: false,
           message: 'Authentication required'
         });
       }
       merchantId = req.user._id;
-      console.log('✅ Authenticated merchant ID:', merchantId);
-      console.log('✅ Merchant ID type:', typeof merchantId);
-      console.log('✅ User role:', req.user.role);
     } else {
       // Handle specific merchant ID (public access)
       merchantId = req.params.merchantId;
-      console.log('📍 Public access for merchant ID:', merchantId);
     }
-    
-    console.log('🔍 Fetching products for merchant:', merchantId);
-    console.log('🔍 Query:', { merchantId, isActive: true });
-    
+
     if (!isSelfRequest) {
       const publicMerchant = await Merchant.findOne({
         _id: merchantId,
@@ -56,29 +41,6 @@ export const getProductsByMerchant = async (req, res) => {
       merchantId,
       isActive: true 
     }).sort({ createdAt: -1 });
-
-    console.log(`✅ Found ${products.length} products`);
-    if (products.length > 0) {
-      console.log('📦 First product:', {
-        id: products[0]._id,
-        name: products[0].name,
-        categoryType: products[0].categoryType,
-        merchantId: products[0].merchantId,
-        merchantIdType: typeof products[0].merchantId
-      });
-    } else {
-      // Debug: Check if any products exist for this merchant without isActive filter
-      const allMerchantProducts = await Product.find({ merchantId });
-      console.log(`🔍 Total products for merchant (including inactive): ${allMerchantProducts.length}`);
-      
-      // Debug: Check if merchantId format is correct
-      const allProducts = await Product.find({}).limit(5);
-      console.log('🔍 Sample products in DB:', allProducts.map(p => ({
-        name: p.name,
-        merchantId: p.merchantId.toString(),
-        isActive: p.isActive
-      })));
-    }
 
     return res.status(200).json({
       success: true,
@@ -394,7 +356,7 @@ export const debugAuth = async (req, res) => {
 export const searchProducts = async (req, res) => {
   try {
     const merchantId = req.user._id;
-    const searchQuery = req.query.q || '';
+    const searchQuery = (req.query.q || '').trim();
 
     const products = await Product.find({
       merchantId,
@@ -405,21 +367,29 @@ export const searchProducts = async (req, res) => {
     .limit(10)
     .sort({ name: 1 });
 
-    // Get variants for each product
+    // Fetch variants in one query to avoid N+1 DB calls.
     const ProductVariant = (await import('../models/ProductVariant.js')).default;
-    const productsWithVariants = await Promise.all(
-      products.map(async (product) => {
-        const variants = await ProductVariant.find({
-          productId: product._id,
-          isActive: true
-        }).select('name price offerPrice discount');
+    const productIds = products.map((product) => product._id);
+    const allVariants = productIds.length
+      ? await ProductVariant.find({
+          productId: { $in: productIds },
+          isActive: true,
+        }).select('productId name price offerPrice discount')
+      : [];
 
-        return {
-          ...product.toObject(),
-          variants
-        };
-      })
-    );
+    const variantsByProductId = new Map();
+    allVariants.forEach((variant) => {
+      const key = variant.productId.toString();
+      if (!variantsByProductId.has(key)) {
+        variantsByProductId.set(key, []);
+      }
+      variantsByProductId.get(key).push(variant);
+    });
+
+    const productsWithVariants = products.map((product) => ({
+      ...product.toObject(),
+      variants: variantsByProductId.get(product._id.toString()) || [],
+    }));
 
     return res.status(200).json({
       success: true,

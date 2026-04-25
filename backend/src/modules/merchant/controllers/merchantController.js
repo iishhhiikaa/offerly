@@ -2,11 +2,14 @@ import Plan from "../../admin/models/Plan.js";
 import Redemption from "../../booking/models/Redemption.js";
 import MerchantSubscription from "../../payment/models/MerchantSubscription.js";
 import Notification from "../../user/models/Notification.js";
+import MerchantNotification from "../models/MerchantNotification.js";
 import { serializeMerchant, serializeRedemption } from "../../../utils/serializers.js";
 import Merchant from "../models/Merchant.js";
 import Offer from "../models/Offer.js";
 import Product from "../models/Product.js";
 import { calculateDistance, formatDistance } from "../../../utils/distance.js";
+
+const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const registrationFields = [
   "storeName",
@@ -38,12 +41,12 @@ const buildMerchantPayload = (body) => {
     payload.phone = body.contactNumber;
   }
 
-  // Auto-approve merchants for immediate visibility
-  payload.status = "approved";
+  // Require admin approval for all new merchants
+  payload.status = "pending";
   payload.hasRequestedStore = true;
-  payload.verified = true;
-  payload.approvedAt = new Date();
-  payload.joinedAt = new Date();
+  payload.verified = false;
+  payload.approvedAt = null;
+  payload.joinedAt = null;
   payload.rejectionReason = "";
   payload.rejectedAt = null;
   payload.rejectedBy = null;
@@ -68,7 +71,7 @@ export const getMerchants = async (req, res) => {
 
   // Existing: Filter by city
   if (req.query.city) {
-    query.city = req.query.city;
+    query.city = new RegExp(`^${escapeRegex(req.query.city.trim())}$`, "i");
   }
 
   // Existing: Filter by category
@@ -77,44 +80,85 @@ export const getMerchants = async (req, res) => {
   }
 
   // Existing: Filter by status (only approved for non-admin)
-  if (!req.user || req.user.role !== "admin") {
+  // Fix: Admins should see the filtered status even if it's not "approved"
+  if (req.user && req.user.role === "admin") {
+    if (req.query.status && req.query.status !== 'all') {
+      query.status = req.query.status;
+    }
+  } else {
     query.status = "approved";
-  } else if (req.query.status) {
-    query.status = req.query.status;
   }
 
-  // NEW: Sorting
+  // Handle search query (q)
+  if (req.query.q) {
+    const searchRegex = new RegExp(escapeRegex(req.query.q.trim()), "i");
+    query.$or = [
+      { storeName: searchRegex },
+      { ownerName: searchRegex },
+      { phone: searchRegex },
+      { email: searchRegex },
+    ];
+  }
+
+  // Pagination & Sorting
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const skip = (page - 1) * limit;
+
   const sortBy = req.query.sortBy || 'createdAt';
   const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
   const sortObj = { [sortBy]: sortOrder };
 
-  // NEW: Limit
-  const limit = parseInt(req.query.limit) || 0;
+  // Fetch count and data in parallel
+  const [initialTotal, initialMerchants] = await Promise.all([
+    Merchant.countDocuments(query),
+    Merchant.find(query)
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limit)
+  ]);
+  let total = initialTotal;
+  let merchants = initialMerchants;
 
-  let merchantsQuery = Merchant.find(query).sort(sortObj);
-
-  if (limit > 0) {
-    merchantsQuery = merchantsQuery.limit(limit);
+  // Fallback city matching for stored city format differences.
+  if (!merchants.length && req.query.city) {
+    query.city = new RegExp(escapeRegex(req.query.city.trim()), "i");
+    const [fallbackTotal, fallbackMerchants] = await Promise.all([
+      Merchant.countDocuments(query),
+      Merchant.find(query)
+        .sort(sortObj)
+        .skip(skip)
+        .limit(limit),
+    ]);
+    merchants = fallbackMerchants;
+    total = fallbackTotal;
   }
-
-  const merchants = await merchantsQuery;
 
   // Parse user coordinates for distance calculation
   const userLat = req.query.userLat ? parseFloat(req.query.userLat) : null;
   const userLng = req.query.userLng ? parseFloat(req.query.userLng) : null;
 
+  const merchantIds = merchants.map((merchant) => merchant._id);
+  const offerCountsRaw = merchantIds.length
+    ? await Offer.aggregate([
+        {
+          $match: {
+            merchantId: { $in: merchantIds },
+            status: "active",
+          },
+        },
+        { $group: { _id: "$merchantId", count: { $sum: 1 } } },
+      ])
+    : [];
+  const offerCountByMerchantId = new Map(
+    offerCountsRaw.map((item) => [item._id.toString(), item.count]),
+  );
+
   // NEW: Calculate offer count for each merchant and add distance
-  const merchantsWithEnhancements = await Promise.all(
-    merchants.map(async (merchant) => {
+  const merchantsWithEnhancements = merchants.map((merchant) => {
       const merchantObj = merchant.toObject();
 
-      // Count active offers
-      const offerCount = await Offer.countDocuments({
-        merchantId: merchant._id,
-        status: 'active'
-      });
-
-      merchantObj.offerCount = offerCount;
+      merchantObj.offerCount = offerCountByMerchantId.get(merchant._id.toString()) || 0;
 
       // Calculate distance if user coordinates provided
       if (userLat && userLng && merchant.coordinates) {
@@ -128,11 +172,18 @@ export const getMerchants = async (req, res) => {
       }
 
       return merchantObj;
-    })
-  );
+    });
 
   return res.status(200).json({
-    merchants: merchantsWithEnhancements.map(serializeMerchant)
+    success: true,
+    merchants: merchantsWithEnhancements.map(serializeMerchant),
+    pagination: {
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+      hasMore: page * limit < total
+    }
   });
 };
 
@@ -216,25 +267,17 @@ export const registerStore = async (req, res) => {
 };
 
 export const getMyStore = async (req, res) => {
-  console.log('getMyStore called for user:', req.user._id, 'phone:', req.user.phone);
   let merchant = await getMerchantForOwner(req.user._id);
 
   // Fallback: try to find by phone if not found by ID
   if (!merchant && req.user.phone) {
-    console.log('Merchant not found by ID, trying by phone:', req.user.phone);
     merchant = await Merchant.findOne({ phone: req.user.phone });
-    
-    if (merchant) {
-      console.log('Merchant found by phone, but ID mismatch. Merchant ID:', merchant._id, 'User ID:', req.user._id);
-    }
   }
 
   if (!merchant) {
-    console.log('Merchant not found for user:', req.user._id);
     return res.status(404).json({ message: "Merchant profile not found" });
   }
 
-  console.log('Merchant found:', merchant._id);
   return res.status(200).json({ merchant: serializeMerchant(merchant) });
 };
 
@@ -321,30 +364,16 @@ export const updateOnboarding = async (req, res) => {
 // Step 2: Business Details
 export const updateBusinessDetails = async (req, res) => {
   try {
-    console.log('=== UPDATE BUSINESS DETAILS ===');
-    console.log('User ID:', req.user._id);
-    console.log('Request body:', req.body);
-    
     const merchant = await Merchant.findById(req.user._id);
     
     if (!merchant) {
-      console.log('ERROR: Merchant not found for user ID:', req.user._id);
       return res.status(404).json({ success: false, message: 'Merchant not found' });
     }
-
-    console.log('Merchant found:', merchant._id, merchant.ownerName);
 
     const { storeName, category, description, businessEmail, businessPhone, logo, photos } = req.body;
 
     // Validate required fields
     if (!storeName || !category || !description || !businessEmail || !businessPhone || !logo) {
-      console.log('ERROR: Missing required fields');
-      console.log('storeName:', storeName);
-      console.log('category:', category);
-      console.log('description:', description);
-      console.log('businessEmail:', businessEmail);
-      console.log('businessPhone:', businessPhone);
-      console.log('logo:', logo);
       return res.status(400).json({ 
         success: false, 
         message: 'Missing required fields' 
@@ -353,7 +382,6 @@ export const updateBusinessDetails = async (req, res) => {
 
     // Validate description word count (10-50 words)
     const wordCount = description.trim().split(/\s+/).filter(word => word.length > 0).length;
-    console.log('Description word count:', wordCount);
     
     if (wordCount < 10) {
       return res.status(400).json({
@@ -369,22 +397,19 @@ export const updateBusinessDetails = async (req, res) => {
     }
 
     // Update merchant
-    merchant.storeName = storeName;
-    merchant.category = category;
-    merchant.description = description;
-    merchant.businessEmail = businessEmail;
-    merchant.businessPhone = businessPhone;
-    merchant.logo = logo;
+    merchant.storeName = storeName.trim();
+    merchant.category = category.trim();
+    merchant.description = description.trim();
+    merchant.businessEmail = businessEmail.trim().toLowerCase();
+    merchant.businessPhone = businessPhone.trim();
+    merchant.logo = logo.trim();
     
     if (photos && Array.isArray(photos)) {
       merchant.photos = photos;
     }
 
     merchant.onboardingStep = Math.max(merchant.onboardingStep, 2);
-    
-    console.log('Saving merchant with onboardingStep:', merchant.onboardingStep);
     await merchant.save();
-    console.log('Merchant saved successfully');
 
     return res.status(200).json({
       success: true,
@@ -393,7 +418,6 @@ export const updateBusinessDetails = async (req, res) => {
     });
   } catch (error) {
     console.error('Update Business Details Error:', error);
-    console.error('Error stack:', error.stack);
     return res.status(500).json({
       success: false,
       message: 'Failed to update business details',
@@ -413,6 +437,14 @@ export const updateKYBDocuments = async (req, res) => {
 
     const { documents, gstNumber } = req.body;
 
+    // Validate documents array exists
+    if (!documents || !Array.isArray(documents)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Documents array is required'
+      });
+    }
+
     // Validate required documents
     const requiredDocs = ['aadhaar_front', 'aadhaar_back', 'pan_card', 'owner_photo', 'business_registration', 'store_front_photo'];
     const uploadedDocTypes = documents.map(doc => doc.type);
@@ -423,6 +455,17 @@ export const updateKYBDocuments = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Missing required documents: ${missingDocs.join(', ')}`
+      });
+    }
+
+    // Validate that all documents have valid URLs
+    const docsWithoutUrl = documents.filter(doc => !doc.url || doc.url.trim() === '');
+    
+    if (docsWithoutUrl.length > 0) {
+      const invalidDocLabels = docsWithoutUrl.map(doc => doc.label || doc.type).join(', ');
+      return res.status(400).json({
+        success: false,
+        message: `The following documents are missing URLs: ${invalidDocLabels}. Please re-upload them.`
       });
     }
 
@@ -478,10 +521,10 @@ export const updateLocationHours = async (req, res) => {
     }
 
     // Update location
-    merchant.address = address;
-    merchant.city = city;
-    merchant.state = state;
-    merchant.pincode = pincode;
+    merchant.address = address.trim();
+    merchant.city = city.trim();
+    merchant.state = state.trim();
+    merchant.pincode = pincode.trim();
     
     // Only update coordinates if they are provided
     if (latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
@@ -686,6 +729,109 @@ export const getStoreConfig = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch store configuration',
+      error: error.message
+    });
+  }
+};
+
+
+// ── Notification Functions ──────────────────────────────────────────────────
+
+export const getMyNotifications = async (req, res) => {
+  try {
+    const merchant = await Merchant.findById(req.user._id);
+
+    if (!merchant) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Merchant profile not found' 
+      });
+    }
+
+    const notifications = await MerchantNotification.find({ 
+      merchantId: merchant._id 
+    })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    const unreadCount = notifications.filter(n => !n.isRead).length;
+
+    return res.status(200).json({
+      success: true,
+      notifications,
+      unreadCount
+    });
+  } catch (error) {
+    console.error('Get notifications error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch notifications',
+      error: error.message
+    });
+  }
+};
+
+export const markNotificationRead = async (req, res) => {
+  try {
+    const notification = await MerchantNotification.findById(req.params.id);
+
+    if (!notification) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found'
+      });
+    }
+
+    // Verify notification belongs to this merchant
+    if (notification.merchantId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    notification.isRead = true;
+    await notification.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    console.error('Mark notification read error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to mark notification as read',
+      error: error.message
+    });
+  }
+};
+
+export const markAllNotificationsRead = async (req, res) => {
+  try {
+    const merchant = await Merchant.findById(req.user._id);
+
+    if (!merchant) {
+      return res.status(404).json({
+        success: false,
+        message: 'Merchant profile not found'
+      });
+    }
+
+    await MerchantNotification.updateMany(
+      { merchantId: merchant._id, isRead: false },
+      { isRead: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'All notifications marked as read'
+    });
+  } catch (error) {
+    console.error('Mark all notifications read error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to mark all notifications as read',
       error: error.message
     });
   }

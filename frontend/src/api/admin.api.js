@@ -21,8 +21,8 @@ export const adminAPI = {
   },
 
   // Get all merchants (for admin)
-  getAllMerchants: async () => {
-    return axiosInstance.get(API_ENDPOINTS.GET_MERCHANTS);
+  getAllMerchants: async (params = {}) => {
+    return axiosInstance.get(API_ENDPOINTS.GET_MERCHANTS, { params });
   },
 
   // Get all cities

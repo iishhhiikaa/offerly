@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
 import QrCodeScannerRoundedIcon from '@mui/icons-material/QrCodeScannerRounded';
@@ -11,26 +11,50 @@ import ArrowBackIosNewRoundedIcon from '@mui/icons-material/ArrowBackIosNewRound
 import MenuRoundedIcon from '@mui/icons-material/MenuRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import WorkspacePremiumRoundedIcon from '@mui/icons-material/WorkspacePremiumRounded';
+import InfoRoundedIcon from '@mui/icons-material/InfoRounded';
+import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
+import SecurityRoundedIcon from '@mui/icons-material/SecurityRounded';
+import ContactSupportRoundedIcon from '@mui/icons-material/ContactSupportRounded';
+import HelpRoundedIcon from '@mui/icons-material/HelpRounded';
+import NotificationsRoundedIcon from '@mui/icons-material/NotificationsRounded';
+import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
 
 import { useApp } from '../customer/context/AppContext';
 import { merchantAPI } from '../../api/merchant.api';
 import OtpVerify from '../customer/pages/auth/OtpVerify';
-import { io } from 'socket.io-client';
+import { useSocket } from '../../context/SocketContext';
 import toast from 'react-hot-toast';
 
-// Sub-modules
+// Sub-modules (Lazy Loaded to prevent ad-blockers from crashing the app)
+const MerchantLogin = lazy(() => import('./auth/MerchantLogin'));
+const MerchantSignup = lazy(() => import('./auth/MerchantSignup'));
+const StoreRegistration = lazy(() => import('./auth/StoreRegistration'));
+const MerchantStatus = lazy(() => import('./auth/MerchantStatus'));
+const MerchantRegistrationFlow = lazy(() => import('./auth/MerchantRegistrationFlow'));
+const MerchantDashboard = lazy(() => import('./pages/Dashboard'));
+const Bookings = lazy(() => import('./pages/Bookings'));
+const Products = lazy(() => import('./pages/Products'));
+const Offers = lazy(() => import('./pages/Offers'));
+const Customers = lazy(() => import('./pages/Customers'));
+const ScannerEntry = lazy(() => import('./pages/ScannerEntry'));
 
-import MerchantLogin from './auth/MerchantLogin';
-import MerchantSignup from './auth/MerchantSignup';
-import StoreRegistration from './auth/StoreRegistration';
-import MerchantStatus from './auth/MerchantStatus';
-import MerchantRegistrationFlow from './auth/MerchantRegistrationFlow';
-import MerchantDashboard from './pages/Dashboard';
-import Bookings from './pages/Bookings';
-import Products from './pages/Products';
-import Offers from './pages/Offers';
-import Customers from './pages/Customers';
-import ScannerEntry from './pages/ScannerEntry';
+// Static Pages (Risk for Ad-Blockers)
+const About = lazy(() => import('./pages/static/About'));
+const LegalTerms = lazy(() => import('./pages/static/LegalTerms'));
+const LegalPrivacy = lazy(() => import('./pages/static/LegalPrivacy'));
+const Contact = lazy(() => import('./pages/static/Contact'));
+const Support = lazy(() => import('./pages/static/Support'));
+
+// Notifications & Profile
+const Notifications = lazy(() => import('./pages/Notifications'));
+const Profile = lazy(() => import('./pages/Profile'));
+
+// Reuse the loader from the main app or define a simple one
+const PageLoader = () => (
+  <div className="flex items-center justify-center min-h-[60vh]">
+    <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+  </div>
+);
 
 const MerchantSidebar = ({ merchant, isMobileMenuOpen, setIsMobileMenuOpen }) => {
   const location = useLocation();
@@ -47,6 +71,19 @@ const MerchantSidebar = ({ merchant, isMobileMenuOpen, setIsMobileMenuOpen }) =>
     { name: 'Store Products', path: '/merchant/products', icon: Inventory2RoundedIcon },
     { name: 'Active Offers', path: '/merchant/offers', icon: LocalOfferRoundedIcon },
     { name: 'Customers', path: '/merchant/customers', icon: PeopleAltRoundedIcon },
+  ];
+
+  const accountNavItems = [
+    { name: 'Notifications', path: '/merchant/notifications', icon: NotificationsRoundedIcon },
+    { name: 'Profile', path: '/merchant/profile', icon: PersonRoundedIcon },
+  ];
+
+  const helpNavItems = [
+    { name: 'About', path: '/merchant/about', icon: InfoRoundedIcon },
+    { name: 'Support', path: '/merchant/support', icon: HelpRoundedIcon },
+    { name: 'Contact', path: '/merchant/contact', icon: ContactSupportRoundedIcon },
+    { name: 'Terms', path: '/merchant/terms', icon: DescriptionRoundedIcon },
+    { name: 'Privacy', path: '/merchant/privacy', icon: SecurityRoundedIcon },
   ];
 
   const handleNavClick = () => {
@@ -122,6 +159,12 @@ const MerchantSidebar = ({ merchant, isMobileMenuOpen, setIsMobileMenuOpen }) =>
 
         <p className="text-micro text-gray-500 uppercase tracking-widest pl-4 mb-2 mt-5">Store Management</p>
         {storeNavItems.map(renderNavItem)}
+
+        <p className="text-micro text-gray-500 uppercase tracking-widest pl-4 mb-2 mt-5">Account</p>
+        {accountNavItems.map(renderNavItem)}
+
+        <p className="text-micro text-gray-500 uppercase tracking-widest pl-4 mb-2 mt-5">Help & Legal</p>
+        {helpNavItems.map(renderNavItem)}
       </nav>
 
       {/* ── Bottom Section ─────────────────────── */}
@@ -164,6 +207,7 @@ const MerchantApp = () => {
   const [merchant, setMerchant] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const fetchMerchant = async () => {
     if (isLoggedIn && user) {
@@ -187,6 +231,9 @@ const MerchantApp = () => {
           }
           setMerchant(merchantData);
         }
+        
+        // Fetch unread notification count
+        fetchUnreadCount();
       } catch (error) {
         console.error('Failed to fetch merchant data:', error);
       } finally {
@@ -194,6 +241,17 @@ const MerchantApp = () => {
       }
     } else {
       setLoading(false);
+    }
+  };
+
+  const fetchUnreadCount = async () => {
+    try {
+      const response = await merchantAPI.getNotifications();
+      if (response.success) {
+        setUnreadCount(response.unreadCount || 0);
+      }
+    } catch (error) {
+      console.error('Failed to fetch unread count:', error);
     }
   };
 
@@ -208,30 +266,33 @@ const MerchantApp = () => {
     }
   }, [location.pathname, isLoggedIn, user]);
 
-  // Handle Real-time Notifications & Approval
+  // Handle Real-time Notifications & Approval (uses shared socket from SocketContext)
+  const { socket } = useSocket();
+
   useEffect(() => {
-    if (isLoggedIn && user && merchant?._id) {
-      const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000');
-      
-      socket.emit('join', { userId: merchant._id, role: 'merchant' });
+    if (!socket || !merchant?._id) return;
 
-      socket.on('merchant_notification', (notification) => {
-        toast.success(notification.title, {
-          description: notification.body,
-          duration: 6000,
-        });
-        
-        // If it's a status update, refresh the merchant data to unlock the dashboard
-        if (notification.type === 'store_status') {
-          fetchMerchant();
-        }
+    const handleNotification = (notification) => {
+      toast.success(notification.title, {
+        description: notification.body,
+        duration: 6000,
       });
+      
+      // Refresh unread count
+      fetchUnreadCount();
+      
+      // If it's a status update, refresh the merchant data to unlock the dashboard
+      if (notification.type === 'store_status') {
+        fetchMerchant();
+      }
+    };
 
-      return () => {
-        socket.disconnect();
-      };
-    }
-  }, [isLoggedIn, user, merchant?._id]);
+    socket.on('merchant_notification', handleNotification);
+
+    return () => {
+      socket.off('merchant_notification', handleNotification);
+    };
+  }, [socket, merchant?._id]);
 
   if (loading) return (
     <div className="min-h-screen grid place-items-center bg-gray-50">
@@ -321,7 +382,32 @@ const MerchantApp = () => {
           <h1 className="text-lg font-display font-extrabold text-gray-900 tracking-tight uppercase">
             OFFERLY<span className="text-primary italic">BIZ</span>
           </h1>
-          <div className="w-10" />
+          
+          {/* Notification & Profile Icons */}
+          <div className="flex items-center gap-2">
+            {/* Notification Icon */}
+            <button
+              onClick={() => navigate('/merchant/notifications')}
+              className="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+              aria-label="Notifications"
+            >
+              <NotificationsRoundedIcon sx={{ fontSize: 22 }} className="text-gray-700" />
+              {unreadCount > 0 && (
+                <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full" />
+              )}
+            </button>
+            
+            {/* Profile Icon */}
+            <button
+              onClick={() => navigate('/merchant/profile')}
+              className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center border border-primary/20"
+              aria-label="Profile"
+            >
+              <span className="text-primary font-bold text-sm">
+                {merchant?.storeName?.charAt(0)}
+              </span>
+            </button>
+          </div>
         </div>
 
         {/* Mobile Menu Backdrop */}
@@ -338,15 +424,29 @@ const MerchantApp = () => {
           <div className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-accent-cool/[0.03] rounded-full blur-3xl pointer-events-none" />
           
           <div className="relative z-10 w-full max-w-7xl mx-auto">
-            <Routes>
-              <Route path="/" element={<MerchantDashboard merchant={merchant} />} />
-              <Route path="/bookings" element={<Bookings merchant={merchant} />} />
-              <Route path="/scanner" element={<ScannerEntry merchant={merchant} />} />
-              <Route path="/products" element={<Products merchant={merchant} />} />
-              <Route path="/offers" element={<Offers merchant={merchant} />} />
-              <Route path="/customers" element={<Customers merchant={merchant} />} />
-              <Route path="*" element={<Navigate to="/merchant" replace />} />
-            </Routes>
+            <Suspense fallback={<PageLoader />}>
+              <Routes>
+                <Route path="/" element={<MerchantDashboard merchant={merchant} />} />
+                <Route path="/bookings" element={<Bookings merchant={merchant} />} />
+                <Route path="/scanner" element={<ScannerEntry merchant={merchant} />} />
+                <Route path="/products" element={<Products merchant={merchant} />} />
+                <Route path="/offers" element={<Offers merchant={merchant} />} />
+                <Route path="/customers" element={<Customers merchant={merchant} />} />
+                
+                {/* Notifications & Profile */}
+                <Route path="/notifications" element={<Notifications />} />
+                <Route path="/profile" element={<Profile merchant={merchant} />} />
+                
+                {/* Static Pages */}
+                <Route path="/about" element={<About />} />
+                <Route path="/support" element={<Support />} />
+                <Route path="/contact" element={<Contact />} />
+                <Route path="/terms" element={<LegalTerms />} />
+                <Route path="/privacy" element={<LegalPrivacy />} />
+                
+                <Route path="*" element={<Navigate to="/merchant" replace />} />
+              </Routes>
+            </Suspense>
           </div>
         </main>
       </div>

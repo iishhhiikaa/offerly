@@ -102,4 +102,10 @@ const redemptionSchema = new mongoose.Schema(
   }
 );
 
+// Indexes for feed and analytics performance
+redemptionSchema.index({ merchantId: 1, status: 1, createdAt: -1 });
+redemptionSchema.index({ offerId: 1, status: 1, createdAt: -1 });
+redemptionSchema.index({ customerId: 1, createdAt: -1 });
+redemptionSchema.index({ status: 1, createdAt: -1 });
+
 export default mongoose.model('Redemption', redemptionSchema);

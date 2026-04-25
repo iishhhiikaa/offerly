@@ -94,15 +94,44 @@ const MerchantSignup = () => {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           try {
-            setTimeout(() => {
-              const mockAddress = `Shop 12, Main Street, Golaghat, Assam - 785621, India`;
-              setFormData((prev) => ({ ...prev, address: mockAddress }));
-              setLocationLoading(false);
+            const { latitude, longitude } = position.coords;
+            const googleApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+            let address = '';
+
+            if (googleApiKey) {
+              // Primary: Google Maps Geocoding API
+              const googleRes = await fetch(
+                `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${googleApiKey}&language=en`
+              );
+              const googleData = await googleRes.json();
+              if (googleData.status === 'OK' && googleData.results?.[0]) {
+                address = googleData.results[0].formatted_address;
+              }
+            }
+
+            // Fallback: OpenStreetMap Nominatim (free, no key)
+            if (!address) {
+              const osmRes = await fetch(
+                `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&addressdetails=1`,
+                { headers: { 'Accept-Language': 'en' } }
+              );
+              const osmData = await osmRes.json();
+              if (osmData?.display_name) {
+                address = osmData.display_name;
+              }
+            }
+
+            if (address) {
+              setFormData((prev) => ({ ...prev, address }));
               toast.success('Location captured successfully!');
-            }, 800);
+            } else {
+              toast.error('Could not determine address. Please enter manually.');
+            }
           } catch (error) {
-            setLocationLoading(false);
             toast.error('Could not determine address. Please enter manually.');
+          } finally {
+            setLocationLoading(false);
           }
         },
         (error) => {
@@ -116,7 +145,9 @@ const MerchantSignup = () => {
     }
   };
 
-  const handlePhotoUpload = (e) => {
+  const [photoUploading, setPhotoUploading] = useState(false);
+
+  const handlePhotoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -130,15 +161,23 @@ const MerchantSignup = () => {
       return;
     }
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setFormData((prev) => ({ ...prev, profilePhoto: reader.result }));
-      toast.success('Photo uploaded successfully!');
-    };
-    reader.onerror = () => {
-      toast.error('Failed to upload photo');
-    };
-    reader.readAsDataURL(file);
+    try {
+      setPhotoUploading(true);
+      // Keep onboarding lightweight: use local preview payload at signup stage.
+      // Authenticated merchant uploads happen in the registration steps after login.
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData((prev) => ({ ...prev, profilePhoto: reader.result }));
+        toast.success('Photo added');
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('Photo upload error:', error);
+      toast.error('Failed to process photo');
+      setFormData((prev) => ({ ...prev, profilePhoto: '' }));
+    } finally {
+      setPhotoUploading(false);
+    }
   };
 
   const handleRemovePhoto = () => {

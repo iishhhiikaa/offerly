@@ -1,26 +1,32 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
-import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import { offerAPI } from '../../../../api/offer.api';
 import OfferCard from '../../components/ui/OfferCard';
 import PageTransition from '../../components/ui/PageTransition';
+import { useApp } from '../../context/AppContext';
 
 const SearchResults = () => {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initial = searchParams.get('q') || '';
+  const { user, selectedCity } = useApp();
+  const cityFilter = selectedCity !== 'Select City' ? selectedCity : (user?.city || undefined);
 
   const [query, setQuery] = useState(initial);
   const [results, setResults] = useState([]);
+  const [allOffers, setAllOffers] = useState([]);
   const [recent] = useState(['Royal Restaurant', 'Gym', 'Fashion', 'Cafe']);
 
   useEffect(() => {
     const fetchResults = async () => {
       if (query.trim()) {
         try {
-          const res = await offerAPI.getAll({ search: query, status: 'active' });
+          if (!cityFilter) {
+            setResults([]);
+            return;
+          }
+          const res = await offerAPI.getAll({ search: query, status: 'active', city: cityFilter });
           setResults(res.offers || []);
         } catch (error) {
           console.error('Search failed:', error);
@@ -28,7 +34,11 @@ const SearchResults = () => {
         }
       } else {
         try {
-          const res = await offerAPI.getAll({ status: 'active', limit: 6 });
+          if (!cityFilter) {
+            setAllOffers([]);
+            return;
+          }
+          const res = await offerAPI.getAll({ status: 'active', city: cityFilter, limit: 6 });
           setAllOffers(res.offers || []);
         } catch (error) {
           console.error('Failed to fetch all offers:', error);
@@ -37,9 +47,7 @@ const SearchResults = () => {
       }
     };
     fetchResults();
-  }, [query]);
-
-  const [allOffers, setAllOffers] = useState([]);
+  }, [query, cityFilter]);
 
   return (
     <PageTransition>
@@ -80,6 +88,9 @@ const SearchResults = () => {
 
             <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wide mb-3 mt-6">All Offers</h3>
             <div className="space-y-3">
+              {!cityFilter && (
+                <p className="text-xs text-text-secondary">Please select a city to load offers.</p>
+              )}
               {allOffers.map((offer, idx) => (
                 <motion.div
                   key={offer._id || offer.id}

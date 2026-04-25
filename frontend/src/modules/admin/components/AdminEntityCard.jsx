@@ -11,6 +11,7 @@ import TimerRoundedIcon from '@mui/icons-material/TimerRounded';
 import PaymentsRoundedIcon from '@mui/icons-material/PaymentsRounded';
 import PlaceRoundedIcon from '@mui/icons-material/PlaceRounded';
 import LocalPhoneRoundedIcon from '@mui/icons-material/LocalPhoneRounded';
+import { getOptimizedImageUrl } from '../../../utils/cloudinaryUtils';
 
 const StatBox = ({ icon: Icon, label, value, colorClass = "text-gray-900" }) => (
   <div className="flex flex-col gap-1 p-2 rounded-md bg-gray-50/50 border border-transparent hover:border-gray-100 hover:bg-white transition-all duration-300 group/stat">
@@ -54,6 +55,8 @@ const AdminEntityCard = ({
     { icon: StarRoundedIcon, label: 'Loyalty', value: 'Silver', color: 'text-indigo-600' },
   ];
 
+  const profileImg = entity.logo || entity.logoUrl || entity.profilePhoto;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 15 }}
@@ -62,16 +65,18 @@ const AdminEntityCard = ({
       transition={{ duration: 0.4, ease: "easeOut" }}
       className="bg-white border-2 border-gray-200 rounded-lg p-5 shadow-[0_4px_25px_rgba(0,0,0,0.02)] hover:shadow-[0_30px_60px_rgba(0,0,0,0.12)] hover:border-primary/20 transition-all duration-500 group relative overflow-hidden"
     >
-      {/* Background Accent on Hover */}
       <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
 
-      {/* Top Row: Profile & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
         <div className="flex items-center gap-4">
           <div className="relative">
             <div className="w-16 h-16 rounded-lg bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center text-primary font-black text-2xl border-2 border-gray-200 shadow-inner group-hover:scale-105 group-hover:rotate-2 transition-all duration-500 overflow-hidden">
-              {entity.logo || entity.logoUrl || entity.profilePhoto ? (
-                <img src={entity.logo || entity.logoUrl || entity.profilePhoto} alt="" className="w-full h-full object-cover" />
+              {profileImg ? (
+                <img 
+                  src={getOptimizedImageUrl(profileImg, 150, 150)} 
+                  alt="" 
+                  className="w-full h-full object-cover" 
+                />
               ) : (
                 name?.[0]?.toUpperCase()
               )}
@@ -130,7 +135,6 @@ const AdminEntityCard = ({
         </div>
       </div>
 
-      {/* Bottom: Stats Grid (Visible only on hover) */}
       <div className="max-h-0 group-hover:max-h-96 group-hover:mt-6 transition-all duration-700 ease-in-out opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-3 bg-gray-50/50 rounded-md border border-gray-100">
           {stats.map((stat, idx) => (

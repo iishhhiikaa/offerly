@@ -23,7 +23,9 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
   const [errors, setErrors] = useState({});
   const fileInputRefs = useRef({});
 
-  const handleFileUpload = (docType, label) => (e) => {
+  const [uploadingDoc, setUploadingDoc] = useState(null);
+
+  const handleFileUpload = (docType, label) => async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -35,12 +37,23 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
       return;
     }
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
+    try {
+      setUploadingDoc(docType);
+
+      // Upload to server
+      const { uploadAPI } = await import('../../../../api/upload.api');
+      const response = await uploadAPI.uploadImage(file);
+      const imageUrl = response?.url || response;
+
+      // Validate that we got a valid URL
+      if (!imageUrl || typeof imageUrl !== 'string' || imageUrl.trim() === '') {
+        throw new Error('Invalid URL received from server');
+      }
+
       const newDoc = {
         type: docType,
         label: label,
-        url: reader.result,
+        url: imageUrl,
         name: file.name,
         size: file.size
       };
@@ -55,23 +68,40 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
       if (errors[docType]) {
         setErrors(prev => ({ ...prev, [docType]: '' }));
       }
-    };
-    reader.onerror = () => {
-      toast.error('Failed to upload file');
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('Document upload error:', error);
+      toast.error(`Failed to upload ${label}. Please try again.`);
+      
+      // Remove any partial document entry
+      setDocuments(prev => prev.filter(d => d.type !== docType));
+      
+      // Set error state
+      setErrors(prev => ({ ...prev, [docType]: `Upload failed for ${label}` }));
+    } finally {
+      setUploadingDoc(null);
+      // Reset file input
+      if (fileInputRefs.current[docType]) {
+        fileInputRefs.current[docType].value = '';
+      }
+    }
   };
 
   const isDocumentUploaded = (docType) => {
-    return documents.some(d => d.type === docType);
+    return documents.some(d => d.type === docType && d.url && d.url.trim() !== '');
   };
 
   const validate = () => {
     const newErrors = {};
 
     documentTypes.forEach(doc => {
-      if (doc.required && !isDocumentUploaded(doc.type)) {
-        newErrors[doc.type] = `${doc.label} is required`;
+      if (doc.required) {
+        const uploadedDoc = documents.find(d => d.type === doc.type);
+        
+        if (!uploadedDoc) {
+          newErrors[doc.type] = `${doc.label} is required`;
+        } else if (!uploadedDoc.url || uploadedDoc.url.trim() === '') {
+          newErrors[doc.type] = `${doc.label} upload failed. Please try again`;
+        }
       }
     });
 
@@ -82,8 +112,21 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     
+    // Check if any upload is in progress
+    if (uploadingDoc) {
+      toast.error('Please wait for all uploads to complete');
+      return;
+    }
+    
     if (!validate()) {
-      toast.error('Please upload all required documents');
+      toast.error('Please upload all required documents with valid URLs');
+      return;
+    }
+
+    // Final validation: ensure all documents have valid URLs
+    const invalidDocs = documents.filter(doc => !doc.url || doc.url.trim() === '');
+    if (invalidDocs.length > 0) {
+      toast.error('Some documents are missing URLs. Please re-upload them.');
       return;
     }
 
@@ -115,18 +158,31 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
                 
                 {!isDocumentUploaded(doc.type) ? (
                   <div 
-                    onClick={() => fileInputRefs.current[doc.type]?.click()}
-                    className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-primary-700 transition-colors cursor-pointer h-[120px] flex flex-col items-center justify-center"
+                    onClick={() => uploadingDoc !== doc.type && fileInputRefs.current[doc.type]?.click()}
+                    className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors h-[120px] flex flex-col items-center justify-center ${
+                      uploadingDoc === doc.type 
+                        ? 'border-blue-400 bg-blue-50 cursor-wait' 
+                        : 'border-gray-300 hover:border-primary-700 cursor-pointer'
+                    }`}
                   >
-                    <UploadFileRoundedIcon className="text-gray-400 mb-1" sx={{ fontSize: 28 }} />
-                    <div className="text-xs font-medium text-gray-700">Click to upload</div>
-                    <div className="text-[10px] text-gray-500 mt-0.5">Max {doc.maxSize}MB</div>
+                    {uploadingDoc === doc.type ? (
+                      <>
+                        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-primary-700 mb-1"></div>
+                        <div className="text-xs font-medium text-primary-700">Uploading...</div>
+                      </>
+                    ) : (
+                      <>
+                        <UploadFileRoundedIcon className="text-gray-400 mb-1" sx={{ fontSize: 28 }} />
+                        <div className="text-xs font-medium text-gray-700">Click to upload</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Max {doc.maxSize}MB</div>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <div className="border border-gray-200 rounded-lg p-3 bg-green-50 h-[120px] flex flex-col justify-between relative overflow-hidden group">
                     <div className="flex items-center gap-3">
                       {/* Show preview if it's an image */}
-                      {documents.find(d => d.type === doc.type)?.url?.startsWith('data:image/') ? (
+                      {documents.find(d => d.type === doc.type)?.url ? (
                         <img 
                           src={documents.find(d => d.type === doc.type)?.url} 
                           alt="Preview" 
@@ -187,18 +243,31 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
                 
                 {!isDocumentUploaded(doc.type) ? (
                   <div 
-                    onClick={() => fileInputRefs.current[doc.type]?.click()}
-                    className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-primary-700 transition-colors cursor-pointer h-[120px] flex flex-col items-center justify-center"
+                    onClick={() => uploadingDoc !== doc.type && fileInputRefs.current[doc.type]?.click()}
+                    className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors h-[120px] flex flex-col items-center justify-center ${
+                      uploadingDoc === doc.type 
+                        ? 'border-blue-400 bg-blue-50 cursor-wait' 
+                        : 'border-gray-300 hover:border-primary-700 cursor-pointer'
+                    }`}
                   >
-                    <UploadFileRoundedIcon className="text-gray-400 mb-1" sx={{ fontSize: 28 }} />
-                    <div className="text-xs font-medium text-gray-700">Click to upload</div>
-                    <div className="text-[10px] text-gray-500 mt-0.5">Max {doc.maxSize}MB</div>
+                    {uploadingDoc === doc.type ? (
+                      <>
+                        <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-primary-700 mb-1"></div>
+                        <div className="text-xs font-medium text-primary-700">Uploading...</div>
+                      </>
+                    ) : (
+                      <>
+                        <UploadFileRoundedIcon className="text-gray-400 mb-1" sx={{ fontSize: 28 }} />
+                        <div className="text-xs font-medium text-gray-700">Click to upload</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">Max {doc.maxSize}MB</div>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <div className="border border-gray-200 rounded-lg p-3 bg-green-50 h-[120px] flex flex-col justify-between relative overflow-hidden group">
                     <div className="flex items-center gap-3">
                       {/* Show preview if it's an image */}
-                      {documents.find(d => d.type === doc.type)?.url?.startsWith('data:image/') ? (
+                      {documents.find(d => d.type === doc.type)?.url ? (
                         <img 
                           src={documents.find(d => d.type === doc.type)?.url} 
                           alt="Preview" 
@@ -260,6 +329,23 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
             <p className="text-xs text-gray-500 mt-1.5">If you have GST registration</p>
           </div>
 
+          {/* Document Upload Summary */}
+          {documents.length > 0 && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <h4 className="text-xs font-semibold text-green-900 mb-2">
+                ✓ Uploaded Documents ({documents.length}/{documentTypes.length})
+              </h4>
+              <div className="space-y-1">
+                {documents.map(doc => (
+                  <div key={doc.type} className="text-xs text-green-700 flex items-center gap-2">
+                    <CheckCircleRoundedIcon sx={{ fontSize: 14 }} />
+                    <span>{doc.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Guidelines */}
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
             <h4 className="text-xs font-semibold text-gray-900 mb-2">ℹ️ Document Guidelines</h4>
@@ -285,12 +371,12 @@ const KYBDocumentsStep = ({ data, category, onSubmit, onBack, loading }) => {
 
             <CleanButton
               type="submit"
-              disabled={loading}
+              disabled={loading || uploadingDoc !== null}
               loading={loading}
               icon={ArrowForwardRoundedIcon}
               className="flex-1"
             >
-              Continue to Location
+              {uploadingDoc ? 'Uploading...' : 'Continue to Location'}
             </CleanButton>
           </div>
         </form>

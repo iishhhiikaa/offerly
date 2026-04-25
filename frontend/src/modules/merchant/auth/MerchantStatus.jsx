@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import HourglassEmptyRoundedIcon from '@mui/icons-material/HourglassEmptyRounded';
@@ -17,6 +17,7 @@ import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
 import { useApp } from '../../customer/context/AppContext';
 import { merchantAPI } from '../../../api/merchant.api';
 import toast from 'react-hot-toast';
+import { useSocket } from '../../../context/SocketContext';
 
 const MerchantStatus = ({ merchant, onStatusChange }) => {
   const navigate = useNavigate();
@@ -27,28 +28,58 @@ const MerchantStatus = ({ merchant, onStatusChange }) => {
   const isPending = merchant?.status === 'pending';
   const isApproved = merchant?.status === 'approved';
 
-  const handleCheckStatus = async () => {
-    setChecking(true);
+  const { socket } = useSocket();
+
+  const handleCheckStatus = async (silent = false) => {
+    if (!silent) setChecking(true);
     try {
       const response = await merchantAPI.getById('me');
       if (response.merchant) {
-        if (response.merchant.status === 'approved') {
-          toast.success('Your store has been approved! 🎉');
-          if (onStatusChange) await onStatusChange();
-        } else if (response.merchant.status === 'rejected') {
-          toast.error('Your application was rejected');
-          if (onStatusChange) await onStatusChange();
-        } else {
-          toast.success('Application is still pending approval', { icon: '⏳' });
+        // Only toast if status changed or it was a manual check
+        if (response.merchant.status !== merchant?.status || !silent) {
+          if (response.merchant.status === 'approved') {
+            toast.success('Your store has been approved! 🎉');
+            if (onStatusChange) await onStatusChange();
+          } else if (response.merchant.status === 'rejected') {
+            toast.error('Your application was rejected');
+            if (onStatusChange) await onStatusChange();
+          } else if (!silent) {
+            toast.success('Application is still pending approval', { icon: '⏳' });
+          }
         }
       }
     } catch (error) {
-      console.error('Status check error:', error);
-      toast.error(error?.message || 'Failed to check status');
+      if (!silent) {
+        console.error('Status check error:', error);
+        toast.error(error?.message || 'Failed to check status');
+      }
     } finally {
-      setChecking(false);
+      if (!silent) setChecking(false);
     }
   };
+
+  // Auto-polling when pending
+  useEffect(() => {
+    if (!isPending) return;
+    const interval = setInterval(() => {
+      handleCheckStatus(true); // silent check
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [isPending]);
+
+  // Real-time socket listener
+  useEffect(() => {
+    if (!socket || !isPending) return;
+
+    const handleNotification = (notification) => {
+      if (notification.type === 'store_status') {
+        handleCheckStatus(true);
+      }
+    };
+
+    socket.on('merchant_notification', handleNotification);
+    return () => socket.off('merchant_notification', handleNotification);
+  }, [socket, isPending]);
 
   const handleGoToDashboard = () => {
     if (isApproved) navigate('/merchant');

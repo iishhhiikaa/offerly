@@ -1,6 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
-import { useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { merchantAPI } from '../../../../api/merchant.api';
@@ -8,8 +7,8 @@ import { offerAPI } from '../../../../api/offer.api';
 import LocationOnRoundedIcon from '@mui/icons-material/LocationOnRounded';
 import PageTransition from '../../components/ui/PageTransition';
 import StoreCard from '../../components/ui/StoreCard';
-import { mockCategories } from '../../data/mockData';
 import { categoryAPI } from '../../../../api/category.api';
+import { useApp } from '../../context/AppContext';
 
 // Fix leaflet default markers
 delete L.Icon.Default.prototype._getIconUrl;
@@ -75,7 +74,8 @@ const parseDistance = (distStr) => {
 };
 
 const MapView = () => {
-  const navigate = useNavigate();
+  const { user, selectedCity } = useApp();
+  const cityFilter = selectedCity !== 'Select City' ? selectedCity : (user?.city || undefined);
   const [merchants, setMerchants] = useState([]);
   const [offerCounts, setOfferCounts] = useState({});
   const [selected, setSelected] = useState(null);
@@ -101,9 +101,15 @@ const MapView = () => {
   useEffect(() => {
     const loadMapData = async () => {
       try {
+        if (!cityFilter) {
+          setMerchants([]);
+          setOfferCounts({});
+          return;
+        }
+
         const [merchantRes, offersRes] = await Promise.all([
-          merchantAPI.getAll({ status: 'approved' }),
-          offerAPI.getAll({ status: 'active' })
+          merchantAPI.getAll({ status: 'approved', city: cityFilter }),
+          offerAPI.getAll({ status: 'active', city: cityFilter })
         ]);
 
         const allMerchants = merchantRes.merchants || [];
@@ -124,7 +130,7 @@ const MapView = () => {
       }
     };
     loadMapData();
-  }, []);
+  }, [cityFilter]);
 
   // Compute filtered and sorted list
   const displayedMerchants = useMemo(() => {

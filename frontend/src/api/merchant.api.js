@@ -54,6 +54,16 @@ export const merchantAPI = {
     }
   },
 
+  // Get merchant dashboard stats (revenue, bookings, customers, etc.)
+  getDashboard: async () => {
+    return axiosInstance.get('/merchants/me/dashboard');
+  },
+
+  // Get merchant's customer directory
+  getCustomers: async () => {
+    return axiosInstance.get('/merchants/me/customers');
+  },
+
   // Search products for offer creation
   searchProducts: async (query) => {
     try {
@@ -63,6 +73,37 @@ export const merchantAPI = {
       return response; // axios interceptor already returns response.data
     } catch (error) {
       console.error('Search products error:', error);
+      throw error;
+    }
+  },
+
+  // Notification APIs
+  getNotifications: async () => {
+    try {
+      const response = await axiosInstance.get('/merchants/me/notifications');
+      return response;
+    } catch (error) {
+      console.error('Get notifications error:', error);
+      throw error;
+    }
+  },
+
+  markNotificationRead: async (id) => {
+    try {
+      const response = await axiosInstance.patch(`/merchants/me/notifications/${id}/read`);
+      return response;
+    } catch (error) {
+      console.error('Mark notification read error:', error);
+      throw error;
+    }
+  },
+
+  markAllNotificationsRead: async () => {
+    try {
+      const response = await axiosInstance.patch('/merchants/me/notifications/mark-all-read');
+      return response;
+    } catch (error) {
+      console.error('Mark all notifications read error:', error);
       throw error;
     }
   },

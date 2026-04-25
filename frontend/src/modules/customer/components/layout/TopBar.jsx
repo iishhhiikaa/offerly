@@ -7,6 +7,7 @@ import CardGiftcardRoundedIcon from '@mui/icons-material/CardGiftcardRounded';
 import ExploreRoundedIcon from '@mui/icons-material/ExploreRounded';
 import BookmarkRoundedIcon from '@mui/icons-material/BookmarkRounded';
 import MapRoundedIcon from '@mui/icons-material/MapRounded';
+import ShoppingCartRoundedIcon from '@mui/icons-material/ShoppingCartRounded';
 import { useApp } from '../../context/AppContext';
 
 // Nav links to display in the new top bar (desktop only)
@@ -27,23 +28,13 @@ const TopBar = () => {
   return (
     <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md shadow-sm border-b border-border/60 px-4 py-3 flex items-center gap-3">
       
-      {/* Mobile Back Button (Overrides toggle on deep views) */}
-      {isNested ? (
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={() => navigate(-1)}
-          className="lg:hidden w-10 h-10 flex items-center justify-center rounded-full bg-surface shadow-sm border border-border"
-        >
-          <ArrowBackRoundedIcon sx={{ fontSize: 22 }} className="text-text-primary" />
-        </motion.button>
-      ) : (
-        <div className="lg:hidden flex items-center gap-2">
-          {/* Mobile Profile logo replacement since we moved things to topbar */}
-          <div className="w-9 h-9 bg-primary/20 rounded-xl flex items-center justify-center text-primary font-bold">
-             {user?.name?.charAt(0)?.toUpperCase() || 'U'}
-          </div>
+      {/* Mobile: Logo on Left */}
+      <div className="lg:hidden flex items-center gap-2 cursor-pointer" onClick={() => navigate('/home')}>
+        <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shadow-sm">
+          <CardGiftcardRoundedIcon sx={{ fontSize: 18 }} className="text-white" />
         </div>
-      )}
+        <span className="font-display text-base font-bold text-primary tracking-wider">OFFERLY</span>
+      </div>
 
       {/* Desktop: Branding only (removed toggle button) */}
       <div className="hidden lg:flex items-center gap-4 w-64 flex-shrink-0 relative">
@@ -56,21 +47,6 @@ const TopBar = () => {
           </span>
         </div>
       </div>
-
-      {/* Mobile Branding (Center) */}
-      {!isNested && (
-        <div className="lg:hidden flex-1 flex justify-center cursor-pointer" onClick={() => navigate('/home')}>
-           <div className="flex items-center gap-1.5">
-             <CardGiftcardRoundedIcon sx={{ fontSize: 18 }} className="text-primary" />
-             <span className="font-display text-lg font-bold text-primary tracking-wider">OFFERLY</span>
-           </div>
-        </div>
-      )}
-      {isNested && (
-        <h1 className="lg:hidden flex-1 text-center font-bold text-text-primary text-base truncate pr-8">
-           Details
-        </h1>
-      )}
 
       {/* Desktop Quick Nav Links (Center) */}
       <div className="hidden lg:flex flex-1 justify-center items-center gap-8">
@@ -90,9 +66,9 @@ const TopBar = () => {
          ))}
       </div>
 
-      {/* Right User Actions (Search, Notifications, Profile) */}
+      {/* Right User Actions (Cart, Notifications, Profile) */}
       <div className="flex items-center gap-2 ml-auto">
-        {/* Only show search if not on home, or maybe always show Search Icon */}
+        {/* Search Icon (Desktop only, not on home) */}
         {location.pathname !== '/home' && (
           <motion.button
             whileTap={{ scale: 0.9 }}
@@ -103,6 +79,16 @@ const TopBar = () => {
           </motion.button>
         )}
 
+        {/* Cart Icon (Mobile & Desktop) */}
+        <motion.button
+          whileTap={{ scale: 0.9 }}
+          onClick={() => navigate('/cart')}
+          className="w-10 h-10 flex items-center justify-center rounded-full bg-surface border border-border/60 hover:bg-white text-text-secondary transition-colors"
+        >
+          <ShoppingCartRoundedIcon sx={{ fontSize: 22 }} />
+        </motion.button>
+
+        {/* Notifications Icon (Mobile & Desktop) */}
         <motion.button
           whileTap={{ scale: 0.9 }}
           onClick={() => navigate('/notifications')}
@@ -121,14 +107,16 @@ const TopBar = () => {
           </AnimatePresence>
         </motion.button>
 
-        {/* Profile Avatar (Desktop) */}
-        <div className="hidden lg:flex items-center gap-2 pl-2 border-l border-border/50 ml-2 cursor-pointer" onClick={() => navigate('/profile')}>
-           <div className="w-10 h-10 bg-primary-light rounded-full flex items-center justify-center border border-primary/20">
-             <span className="text-primary font-bold text-sm">
-               {user?.name?.charAt(0)?.toUpperCase()}
-             </span>
-           </div>
-        </div>
+        {/* Profile Avatar (Mobile & Desktop) */}
+        <motion.button
+          whileTap={{ scale: 0.9 }}
+          onClick={() => navigate('/profile')}
+          className="w-10 h-10 bg-primary-light rounded-full flex items-center justify-center border border-primary/20 cursor-pointer"
+        >
+          <span className="text-primary font-bold text-sm">
+            {user?.name?.charAt(0)?.toUpperCase() || 'U'}
+          </span>
+        </motion.button>
       </div>
     </header>
   );

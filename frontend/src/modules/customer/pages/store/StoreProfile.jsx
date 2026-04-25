@@ -14,13 +14,12 @@ import {
   getOffersByMerchant, 
   getReviewsByMerchant,
   getProductsByMerchant,
-  getCart,
-  updateCartItem,
 } from '../../data/localStorageUtils';
 import { merchantAPI } from '../../../../api/merchant.api';
 import { productAPI } from '../../../../api/product.api';
 import { offerAPI } from '../../../../api/offer.api';
 import { reviewAPI } from '../../../../api/review.api';
+import { cartAPI } from '../../../../api/cart.api';
 import PageTransition from '../../components/ui/PageTransition';
 
 const StoreProfile = () => {
@@ -51,18 +50,30 @@ const StoreProfile = () => {
           
           setMerchant(m);
           
-          // Parallel fetch for products, offers and reviews
-          const [productsRes, offersRes, reviewRes] = await Promise.all([
+          // Parallel fetch for products, offers, reviews and cart
+          const [productsRes, offersRes, reviewRes, cartRes] = await Promise.all([
             productAPI.getByMerchant(id).catch(err => ({ products: [] })),
             offerAPI.getAll({ merchantId: id, status: 'active' }).catch(err => ({ offers: [] })),
-            reviewAPI.getMerchantReviews(id).catch(err => ({ data: [] }))
+            reviewAPI.getMerchantReviews(id).catch(err => ({ data: [] })),
+            cartAPI.getCart().catch(err => ({ data: null }))
           ]);
 
           setProducts(productsRes.products || []);
           setOffers(offersRes.offers || []);
           setReviews(reviewRes.data || []);
           
-          setCart(getCart());
+          // Only set cart if it belongs to this merchant
+          const backendCart = cartRes.data;
+          if (backendCart && backendCart.merchantId && 
+              (backendCart.merchantId._id || backendCart.merchantId) === id) {
+            setCart({
+              merchantId: backendCart.merchantId._id || backendCart.merchantId,
+              items: backendCart.items || []
+            });
+          } else {
+            setCart({ merchantId: null, items: [] });
+          }
+          
           setLoading(false);
         }
       } catch (error) {
@@ -75,7 +86,7 @@ const StoreProfile = () => {
     loadStoreData();
   }, [id, navigate]);
 
-  const handleUpdateQty = (product, newQty) => {
+  const handleUpdateQty = async (product, newQty) => {
     const merchantId = merchant._id || merchant.id;
     const cartMerchantId = cart.merchantId;
     
@@ -85,14 +96,29 @@ const StoreProfile = () => {
         return;
       }
     }
-    const updated = updateCartItem(merchantId, product, newQty);
-    setCart({ ...updated });
+
+    try {
+      const productId = product._id || product.id;
+      const response = await cartAPI.updateCart(merchantId, productId, newQty);
+      
+      if (response && response.data) {
+        setCart({
+          merchantId: response.data.merchantId._id || response.data.merchantId,
+          items: response.data.items || []
+        });
+      } else {
+        setCart({ merchantId: null, items: [] });
+      }
+    } catch (error) {
+      console.error('Failed to update cart:', error);
+      toast.error('Failed to update cart');
+    }
   };
 
   const getQty = (productId) => {
     const merchantId = merchant?._id || merchant?.id;
     if (cart.merchantId !== merchantId) return 0;
-    const item = cart.items.find(i => (i.product.id === productId || i.product._id === productId));
+    const item = cart.items.find(i => (i.product._id || i.product) === productId);
     return item ? item.qty : 0;
   };
 

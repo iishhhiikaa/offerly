@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import GroupRoundedIcon from '@mui/icons-material/GroupRounded';
 import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import LocalOfferRoundedIcon from '@mui/icons-material/LocalOfferRounded';
@@ -7,7 +8,7 @@ import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded';
 import HourglassEmptyRoundedIcon from '@mui/icons-material/HourglassEmptyRounded';
 import ArrowForwardRoundedIcon from '@mui/icons-material/ArrowForwardRounded';
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { adminAPI } from '../../../api/admin.api';
 
 const AdminStatCard = ({ title, value, icon: Icon, colorClass, bgClass, trend, trendColor }) => (
@@ -49,25 +50,62 @@ const CustomTooltip = ({ active, payload, label }) => {
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState(null);
 
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  const fetchDashboardData = async () => {
-    try {
+  // 1. Fetch dashboard data with React Query
+  const { data: dashboardData, isLoading: loading, error } = useQuery({
+    queryKey: ['adminDashboard'],
+    queryFn: async () => {
       const response = await adminAPI.getDashboardStats();
-      if (response.success) {
-        setStats(response.data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch dashboard stats:', error);
-    } finally {
-      setLoading(false);
+      if (response.success) return response.data;
+      throw new Error('Failed to fetch dashboard stats');
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes cache
+  });
+
+  // 2. Computed formatted data for charts with memoization
+  const chartStats = useMemo(() => {
+    if (!dashboardData) return { filledSignups: [], filledRedemptions: [], categoryData: [], s: {} };
+
+    const s = dashboardData.stats || {};
+    const charts = dashboardData.charts || {};
+
+    // Get last 7 days short names
+    const last7Days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      last7Days.push(d.toLocaleDateString('en-US', { weekday: 'short' }));
     }
-  };
+
+    // Process daily signups
+    const signupData = (charts.dailySignups || []).map(item => ({
+      date: new Date(item.date).toLocaleDateString('en-US', { weekday: 'short' }),
+      count: item.count,
+    }));
+    const filledSignups = last7Days.map(day => {
+      const found = signupData.find(s => s.date === day);
+      return { date: day, count: found?.count || 0 };
+    });
+
+    // Process daily redemptions
+    const redemptionData = (charts.dailyRedemptions || []).map(item => ({
+      date: new Date(item.date).toLocaleDateString('en-US', { weekday: 'short' }),
+      count: item.count,
+      revenue: item.revenue || 0,
+    }));
+    const filledRedemptions = last7Days.map(day => {
+      const found = redemptionData.find(r => r.date === day);
+      return { date: day, count: found?.count || 0, revenue: found?.revenue || 0 };
+    });
+
+    // Process category data
+    const categoryData = (charts.revenueByCategory || []).map(item => ({
+      category: item.category || 'Other',
+      revenue: item.revenue || 0,
+    }));
+
+    return { filledSignups, filledRedemptions, categoryData, s, recentMerchants: dashboardData.recentMerchants || [] };
+  }, [dashboardData]);
 
   if (loading) {
     return (
@@ -80,43 +118,13 @@ const AdminDashboard = () => {
     );
   }
 
-  const s = stats?.stats || {};
-  const charts = stats?.charts || {};
+  if (error) return (
+    <div className="p-12 text-center text-rose-500 font-bold bg-rose-50 rounded-xl border border-rose-100">
+      Failed to load dashboard data. Please try again later.
+    </div>
+  );
 
-  // Format chart data with short day names
-  const signupData = (charts.dailySignups || []).map(item => ({
-    date: new Date(item.date).toLocaleDateString('en-US', { weekday: 'short' }),
-    count: item.count,
-  }));
-
-  const redemptionData = (charts.dailyRedemptions || []).map(item => ({
-    date: new Date(item.date).toLocaleDateString('en-US', { weekday: 'short' }),
-    count: item.count,
-    revenue: item.revenue || 0,
-  }));
-
-  const categoryData = (charts.revenueByCategory || []).map(item => ({
-    category: item.category || 'Other',
-    revenue: item.revenue || 0,
-  }));
-
-  // Ensure we have 7 days of data for charts
-  const last7Days = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    last7Days.push(d.toLocaleDateString('en-US', { weekday: 'short' }));
-  }
-
-  const filledSignups = last7Days.map(day => {
-    const found = signupData.find(s => s.date === day);
-    return { date: day, count: found?.count || 0 };
-  });
-
-  const filledRedemptions = last7Days.map(day => {
-    const found = redemptionData.find(r => r.date === day);
-    return { date: day, count: found?.count || 0, revenue: found?.revenue || 0 };
-  });
+  const { filledSignups, filledRedemptions, categoryData, s, recentMerchants } = chartStats;
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
@@ -130,42 +138,10 @@ const AdminDashboard = () => {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <AdminStatCard
-          title="Total Merchants"
-          value={s.totalMerchants || 0}
-          icon={StorefrontRoundedIcon}
-          bgClass="bg-[#3D7A4F]/20"
-          colorClass="text-[#3D7A4F]"
-          trend="+12%"
-          trendColor="text-[#3D7A4F]"
-        />
-        <AdminStatCard
-          title="Pending Approvals"
-          value={s.pendingMerchants || 0}
-          icon={HourglassEmptyRoundedIcon}
-          bgClass="bg-[#EAB308]/20"
-          colorClass="text-[#EAB308]"
-          trend="Action Req."
-          trendColor="text-[#EAB308]"
-        />
-        <AdminStatCard
-          title="Total Customers"
-          value={s.totalCustomers || 0}
-          icon={GroupRoundedIcon}
-          bgClass="bg-[#3B82F6]/20"
-          colorClass="text-[#3B82F6]"
-          trend="+25%"
-          trendColor="text-[#3B82F6]"
-        />
-        <AdminStatCard
-          title="Total Revenue"
-          value={`₹${(s.totalRevenue || 0).toLocaleString()}`}
-          icon={TrendingUpRoundedIcon}
-          bgClass="bg-[#8B5CF6]/20"
-          colorClass="text-[#8B5CF6]"
-          trend="+18%"
-          trendColor="text-[#8B5CF6]"
-        />
+        <AdminStatCard title="Total Merchants" value={s.totalMerchants || 0} icon={StorefrontRoundedIcon} bgClass="bg-[#3D7A4F]/20" colorClass="text-[#3D7A4F]" trend="+12%" trendColor="text-[#3D7A4F]" />
+        <AdminStatCard title="Pending Approvals" value={s.pendingMerchants || 0} icon={HourglassEmptyRoundedIcon} bgClass="bg-[#EAB308]/20" colorClass="text-[#EAB308]" trend="Action Req." trendColor="text-[#EAB308]" />
+        <AdminStatCard title="Total Customers" value={s.totalCustomers || 0} icon={GroupRoundedIcon} bgClass="bg-[#3B82F6]/20" colorClass="text-[#3B82F6]" trend="+25%" trendColor="text-[#3B82F6]" />
+        <AdminStatCard title="Total Revenue" value={`₹${(s.totalRevenue || 0).toLocaleString()}`} icon={TrendingUpRoundedIcon} bgClass="bg-[#8B5CF6]/20" colorClass="text-[#8B5CF6]" trend="+18%" trendColor="text-[#8B5CF6]" />
       </div>
 
       {/* Pending Approvals Banner */}
@@ -194,7 +170,6 @@ const AdminDashboard = () => {
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Bar Chart - Signup Activity */}
         <div className="bg-white rounded-md p-8 shadow-sm border border-gray-100 lg:col-span-1">
           <div className="flex items-center justify-between mb-8">
             <div>
@@ -211,34 +186,14 @@ const AdminDashboard = () => {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-              <XAxis 
-                dataKey="date" 
-                tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} 
-                axisLine={false} 
-                tickLine={false} 
-                dy={10}
-              />
-              <YAxis 
-                tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} 
-                axisLine={false} 
-                tickLine={false} 
-                allowDecimals={false} 
-              />
-              <Tooltip 
-                cursor={{ fill: '#f9fafb', radius: 4 }}
-                content={<CustomTooltip />} 
-              />
-              <Bar 
-                dataKey="count" 
-                fill="url(#growthGradient)" 
-                radius={[4, 4, 0, 0]} 
-                animationDuration={1500}
-              />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} axisLine={false} tickLine={false} dy={10} />
+              <YAxis tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip cursor={{ fill: '#f9fafb', radius: 4 }} content={<CustomTooltip />} />
+              <Bar dataKey="count" fill="url(#growthGradient)" radius={[4, 4, 0, 0]} animationDuration={1500} />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Bar Chart - Redemption Activity */}
         <div className="bg-white rounded-md p-8 shadow-sm border border-gray-100 lg:col-span-1">
           <div className="flex items-center justify-between mb-8">
             <div>
@@ -255,34 +210,14 @@ const AdminDashboard = () => {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-              <XAxis 
-                dataKey="date" 
-                tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} 
-                axisLine={false} 
-                tickLine={false} 
-                dy={10}
-              />
-              <YAxis 
-                tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} 
-                axisLine={false} 
-                tickLine={false} 
-                allowDecimals={false} 
-              />
-              <Tooltip 
-                cursor={{ fill: '#f9fafb', radius: 4 }}
-                content={<CustomTooltip />} 
-              />
-              <Bar 
-                dataKey="count" 
-                fill="url(#redemptionGradient)" 
-                radius={[4, 4, 0, 0]} 
-                animationDuration={1500}
-              />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} axisLine={false} tickLine={false} dy={10} />
+              <YAxis tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip cursor={{ fill: '#f9fafb', radius: 4 }} content={<CustomTooltip />} />
+              <Bar dataKey="count" fill="url(#redemptionGradient)" radius={[4, 4, 0, 0]} animationDuration={1500} />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Bar Chart - Revenue Breakdown */}
         <div className="bg-white rounded-md p-8 shadow-sm border border-gray-100 lg:col-span-1">
           <div className="flex items-center justify-between mb-8">
             <div>
@@ -299,29 +234,10 @@ const AdminDashboard = () => {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-              <XAxis 
-                dataKey="category" 
-                tick={{ fontSize: 8, fontWeight: 800, fill: '#9CA3AF' }} 
-                axisLine={false} 
-                tickLine={false} 
-                dy={10}
-              />
-              <YAxis 
-                tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} 
-                axisLine={false} 
-                tickLine={false} 
-              />
-              <Tooltip 
-                cursor={{ fill: '#f9fafb', radius: 4 }}
-                content={<CustomTooltip />} 
-              />
-              <Bar 
-                name="revenue"
-                dataKey="revenue" 
-                fill="url(#revenueGradient)" 
-                radius={[4, 4, 0, 0]} 
-                animationDuration={1500}
-              />
+              <XAxis dataKey="category" tick={{ fontSize: 8, fontWeight: 800, fill: '#9CA3AF' }} axisLine={false} tickLine={false} dy={10} />
+              <YAxis tick={{ fontSize: 9, fontWeight: 800, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+              <Tooltip cursor={{ fill: '#f9fafb', radius: 4 }} content={<CustomTooltip />} />
+              <Bar name="revenue" dataKey="revenue" fill="url(#revenueGradient)" radius={[4, 4, 0, 0]} animationDuration={1500} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -329,17 +245,13 @@ const AdminDashboard = () => {
 
       {/* Bottom Section: Recent Merchants + Quick Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Recent Merchants Table */}
         <div className="lg:col-span-2 bg-white rounded-md shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
             <div>
               <h3 className="text-lg font-black text-gray-900">Recent Merchants</h3>
               <p className="text-xs text-gray-400 font-medium mt-0.5">Track and manage latest applications</p>
             </div>
-            <button
-              onClick={() => navigate('/admin/merchants')}
-              className="text-xs font-bold text-primary hover:underline flex items-center gap-1 uppercase tracking-widest"
-            >
+            <button onClick={() => navigate('/admin/merchants')} className="text-xs font-bold text-primary hover:underline flex items-center gap-1 uppercase tracking-widest">
               View All <ArrowForwardRoundedIcon sx={{ fontSize: 14 }} />
             </button>
           </div>
@@ -355,18 +267,12 @@ const AdminDashboard = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {(stats?.recentMerchants || []).length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-10 text-center text-gray-400 font-medium text-sm">
-                      No merchants registered yet.
-                    </td>
-                  </tr>
+                {recentMerchants.length === 0 ? (
+                  <tr><td colSpan={5} className="px-6 py-10 text-center text-gray-400 font-medium text-sm">No merchants registered yet.</td></tr>
                 ) : (
-                  (stats?.recentMerchants || []).map((m) => (
+                  recentMerchants.map((m) => (
                     <tr key={m._id} className="hover:bg-gray-50/50 transition-colors cursor-pointer" onClick={() => navigate('/admin/merchants')}>
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-gray-900 text-sm">{m.storeName}</p>
-                      </td>
+                      <td className="px-6 py-4"><p className="font-bold text-gray-900 text-sm">{m.storeName}</p></td>
                       <td className="px-6 py-4 text-sm text-gray-600 font-medium">{m.category}</td>
                       <td className="px-6 py-4 text-sm text-gray-600 font-medium">{m.city}</td>
                       <td className="px-6 py-4">
@@ -374,9 +280,7 @@ const AdminDashboard = () => {
                           m.status === 'approved' ? 'bg-green-50 text-green-600' :
                           m.status === 'pending' ? 'bg-amber-50 text-amber-600' :
                           'bg-red-50 text-red-600'
-                        }`}>
-                          {m.status}
-                        </span>
+                        }`}>{m.status}</span>
                       </td>
                       <td className="px-6 py-4">
                         <button className="w-8 h-8 rounded-md bg-gray-50 hover:bg-primary/10 flex items-center justify-center transition-colors group">
@@ -391,7 +295,6 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Quick Actions / Activity Feed */}
         <div className="bg-white rounded-md shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-black text-gray-900 mb-6">Quick Actions</h3>
           <div className="space-y-3">
@@ -400,14 +303,8 @@ const AdminDashboard = () => {
               { label: 'Manage Categories', icon: LocalOfferRoundedIcon, color: 'text-purple-600', bg: 'bg-purple-50', path: '/admin/categories' },
               { label: 'Platform Settings', icon: TrendingUpRoundedIcon, color: 'text-gray-600', bg: 'bg-gray-50', path: '/admin/settings' },
             ].map((action, i) => (
-              <button
-                key={i}
-                onClick={() => navigate(action.path)}
-                className="w-full flex items-center gap-4 p-4 rounded-md border border-gray-100 hover:border-primary/20 hover:bg-primary/5 transition-all group"
-              >
-                <div className={`w-10 h-10 rounded-md ${action.bg} flex items-center justify-center ${action.color}`}>
-                  <action.icon sx={{ fontSize: 20 }} />
-                </div>
+              <button key={i} onClick={() => navigate(action.path)} className="w-full flex items-center gap-4 p-4 rounded-md border border-gray-100 hover:border-primary/20 hover:bg-primary/5 transition-all group">
+                <div className={`w-10 h-10 rounded-md ${action.bg} flex items-center justify-center ${action.color}`}><action.icon sx={{ fontSize: 20 }} /></div>
                 <span className="text-sm font-bold text-gray-700 group-hover:text-primary">{action.label}</span>
               </button>
             ))}

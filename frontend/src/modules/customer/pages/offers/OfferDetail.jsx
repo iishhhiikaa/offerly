@@ -10,13 +10,11 @@ import BookmarkRoundedIcon from '@mui/icons-material/BookmarkRounded';
 import BookmarkBorderRoundedIcon from '@mui/icons-material/BookmarkBorderRounded';
 import QrCodeScannerRoundedIcon from '@mui/icons-material/QrCodeScannerRounded';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import {
-  getOfferById, getMerchantById, getReviewsByMerchant,
-  getSavedOfferIds, createRedemption,
-} from '../../data/localStorageUtils';
+import ReceiptLongRoundedIcon from '@mui/icons-material/ReceiptLongRounded';
 import { offerAPI } from '../../../../api/offer.api';
 import { userAPI } from '../../../../api/user.api';
 import { bookingAPI } from '../../../../api/booking.api';
+import { cartAPI } from '../../../../api/cart.api';
 import { reviewAPI } from '../../../../api/review.api';
 import PageTransition from '../../components/ui/PageTransition';
 import { useApp } from '../../context/AppContext';
@@ -25,7 +23,7 @@ import toast from 'react-hot-toast';
 const OfferDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isLoggedIn, user } = useApp();
+  const { isLoggedIn, user, refreshUser } = useApp();
 
   const [offer, setOffer] = useState(null);
   const [merchant, setMerchant] = useState(null);
@@ -33,6 +31,7 @@ const OfferDetail = () => {
   const [isSaved, setIsSaved] = useState(false);
   const [isRedeeming, setIsRedeeming] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadOffer = async () => {
@@ -59,6 +58,8 @@ const OfferDetail = () => {
         console.error('Failed to fetch offer:', error);
         toast.error('Offer not found');
         navigate('/explore');
+      } finally {
+        setLoading(false);
       }
     };
     
@@ -78,6 +79,10 @@ const OfferDetail = () => {
     try {
       const response = await userAPI.toggleSavedOffer(id);
       setIsSaved(response.isSaved);
+      
+      // Sync global user state immediately
+      await refreshUser();
+      
       toast.success(response.isSaved ? 'Offer saved!' : 'Offer removed', {
         icon: response.isSaved ? '🔖' : '✅',
         duration: 2000,
@@ -99,23 +104,21 @@ const OfferDetail = () => {
     
     setIsRedeeming(true);
     try {
-      const offerId = offer._id || offer.id;
       const merchantId = merchant?._id || merchant?.id || offer.merchantId;
       
-      const response = await bookingAPI.create({
-        offerId,
-        merchantId
-      });
-
-      if (response && response.success) {
-        toast.success('Redemption code generated!');
-        navigate(`/redeem/${response.data._id || response.data.id}`);
+      if (offer.productId) {
+        // Add to cart and navigate to CartView
+        await cartAPI.updateCart(merchantId, offer.productId, 1);
+        toast.success('Added to your booking cart!');
+        navigate('/cart');
       } else {
-        throw new Error(response.error || 'Failed to create redemption');
+        // Generic offer - redirect to store to add items
+        toast.success('Offer applied! Add items to redeem.', { icon: '✨' });
+        navigate(`/store/${merchantId}`, { state: { appliedOffer: offer } });
       }
     } catch (error) {
       console.error('Redemption error:', error);
-      toast.error(error.response?.data?.error || error.message || 'Failed to redeem. Please try again.');
+      toast.error(error.response?.data?.error || error.message || 'Failed to process. Please try again.');
     } finally {
       setIsRedeeming(false);
     }
@@ -128,6 +131,16 @@ const OfferDetail = () => {
 
   const validTo = offer ? new Date(offer.validTo).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   const redemptionPercent = offer ? Math.round((offer.currentRedemptions / offer.maxRedemptions) * 100) : 0;
+
+  if (loading) {
+    return (
+      <PageTransition>
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+      </PageTransition>
+    );
+  }
 
   if (!offer) return null;
 
@@ -301,8 +314,8 @@ const OfferDetail = () => {
                 <div className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
               ) : (
                 <>
-                  <QrCodeScannerRoundedIcon sx={{ fontSize: 20 }} />
-                  Scan to Redeem
+                  <ReceiptLongRoundedIcon sx={{ fontSize: 20 }} />
+                  Book This Offer
                 </>
               )}
             </motion.button>

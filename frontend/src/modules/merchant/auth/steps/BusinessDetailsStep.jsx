@@ -60,7 +60,9 @@ const BusinessDetailsStep = ({ data, onSubmit, onBack, loading }) => {
     }
   };
 
-  const handleLogoUpload = (e) => {
+  const [uploading, setUploading] = useState({});
+
+  const handleLogoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -74,18 +76,31 @@ const BusinessDetailsStep = ({ data, onSubmit, onBack, loading }) => {
       return;
     }
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setFormData({ ...formData, logo: reader.result });
+    try {
+      setUploading(prev => ({ ...prev, logo: true }));
+      // Show instant preview via base64
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData(prev => ({ ...prev, logo: reader.result }));
+      };
+      reader.readAsDataURL(file);
+
+      // Upload to server and replace with URL
+      const { uploadAPI } = await import('../../../../api/upload.api');
+      const response = await uploadAPI.uploadImage(file);
+      const imageUrl = response?.url || response;
+      setFormData(prev => ({ ...prev, logo: imageUrl }));
       toast.success('Logo uploaded successfully!');
-    };
-    reader.onerror = () => {
-      toast.error('Failed to upload logo');
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('Logo upload error:', error);
+      toast.error('Failed to upload logo. Please try again.');
+      setFormData(prev => ({ ...prev, logo: '' }));
+    } finally {
+      setUploading(prev => ({ ...prev, logo: false }));
+    }
   };
 
-  const handlePhotosUpload = (e) => {
+  const handlePhotosUpload = async (e) => {
     const files = Array.from(e.target.files || []);
     
     if (formData.photos.length + files.length > 4) {
@@ -105,19 +120,29 @@ const BusinessDetailsStep = ({ data, onSubmit, onBack, loading }) => {
       return true;
     });
 
-    validFiles.forEach(file => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData(prev => ({
-          ...prev,
-          photos: [...prev.photos, reader.result]
-        }));
-      };
-      reader.readAsDataURL(file);
-    });
+    if (validFiles.length === 0) return;
 
-    if (validFiles.length > 0) {
-      toast.success(`${validFiles.length} photo(s) uploaded!`);
+    try {
+      setUploading(prev => ({ ...prev, photos: true }));
+      const { uploadAPI } = await import('../../../../api/upload.api');
+      
+      const uploadedUrls = [];
+      for (const file of validFiles) {
+        const response = await uploadAPI.uploadImage(file);
+        const imageUrl = response?.url || response;
+        uploadedUrls.push(imageUrl);
+      }
+
+      setFormData(prev => ({
+        ...prev,
+        photos: [...prev.photos, ...uploadedUrls]
+      }));
+      toast.success(`${uploadedUrls.length} photo(s) uploaded!`);
+    } catch (error) {
+      console.error('Photos upload error:', error);
+      toast.error('Failed to upload some photos');
+    } finally {
+      setUploading(prev => ({ ...prev, photos: false }));
     }
   };
 
@@ -131,60 +156,34 @@ const BusinessDetailsStep = ({ data, onSubmit, onBack, loading }) => {
   const validate = () => {
     const newErrors = {};
 
-    console.log('=== VALIDATION START ===');
-
     if (!formData.storeName || formData.storeName.trim().length < 3) {
       newErrors.storeName = 'Business name must be at least 3 characters';
-      console.log('❌ Store name validation failed:', formData.storeName);
-    } else {
-      console.log('✅ Store name valid:', formData.storeName);
     }
 
     if (!formData.category) {
       newErrors.category = 'Please select a business category';
-      console.log('❌ Category validation failed');
-    } else {
-      console.log('✅ Category valid:', formData.category);
     }
 
     // Word count validation for description
     const wordCount = formData.description.trim().split(/\s+/).filter(word => word.length > 0).length;
-    console.log('Description word count:', wordCount, '(min: 10, max: 50)');
     
     if (!formData.description || wordCount < 10) {
       newErrors.description = 'Description must be at least 10 words';
-      console.log('❌ Description too short:', wordCount, 'words');
     } else if (wordCount > 50) {
       newErrors.description = 'Description must not exceed 50 words';
-      console.log('❌ Description too long:', wordCount, 'words');
-    } else {
-      console.log('✅ Description valid:', wordCount, 'words');
     }
 
     if (!formData.businessEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.businessEmail)) {
       newErrors.businessEmail = 'Please enter a valid business email';
-      console.log('❌ Email validation failed:', formData.businessEmail);
-    } else {
-      console.log('✅ Email valid:', formData.businessEmail);
     }
 
     if (!formData.businessPhone || formData.businessPhone.length !== 10) {
       newErrors.businessPhone = 'Please enter a valid 10-digit phone number';
-      console.log('❌ Phone validation failed:', formData.businessPhone, 'length:', formData.businessPhone?.length);
-    } else {
-      console.log('✅ Phone valid:', formData.businessPhone);
     }
 
     if (!formData.logo) {
       newErrors.logo = 'Please upload a business logo';
-      console.log('❌ Logo validation failed');
-    } else {
-      console.log('✅ Logo valid');
     }
-
-    console.log('=== VALIDATION END ===');
-    console.log('Errors found:', Object.keys(newErrors).length);
-    console.log('Error details:', newErrors);
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -193,21 +192,13 @@ const BusinessDetailsStep = ({ data, onSubmit, onBack, loading }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     
-    console.log('=== BUSINESS DETAILS SUBMIT ===');
-    console.log('Form data:', formData);
-    console.log('Logo present:', !!formData.logo);
-    console.log('Photos count:', formData.photos?.length || 0);
-    
     const isValid = validate();
     
     if (!isValid) {
-      console.log('❌ Validation failed');
-      console.log('Current errors:', errors);
       toast.error('Please fix the errors');
       return;
     }
 
-    console.log('✅ Validation passed, submitting...');
     onSubmit(formData);
   };
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom';
 import SpaceDashboardRoundedIcon from '@mui/icons-material/SpaceDashboardRounded';
 import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
@@ -17,18 +17,19 @@ import CalendarTodayRoundedIcon from '@mui/icons-material/CalendarTodayRounded';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
 import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownRounded';
 
-import AdminDashboard from './pages/Dashboard';
-import MerchantManagement from './pages/MerchantManagement';
-import BookingLedger from './pages/BookingLedger';
-import CityManagement from './pages/CityManagement';
-import UserManagement from './pages/UserManagement';
-import SubscriptionManagement from './pages/SubscriptionManagement';
-import AdRequestManagement from './pages/AdRequestManagement';
-import Analytics from './pages/Analytics';
-import CategoryManagement from './pages/CategoryManagement';
-import Notifications from './pages/Notifications';
-import SearchResults from './pages/SearchResults';
-import AdminLogin from './pages/AdminLogin';
+// Admin Pages (Lazy Loaded for performance and ad-blocker resilience)
+const AdminDashboard = lazy(() => import('./pages/Dashboard'));
+const MerchantManagement = lazy(() => import('./pages/MerchantManagement'));
+const BookingLedger = lazy(() => import('./pages/BookingLedger'));
+const CityManagement = lazy(() => import('./pages/CityManagement'));
+const UserManagement = lazy(() => import('./pages/UserManagement'));
+const SubscriptionManagement = lazy(() => import('./pages/SubscriptionManagement'));
+const PromotionRequest = lazy(() => import('./pages/PromotionRequest'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const CategoryManagement = lazy(() => import('./pages/CategoryManagement'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const SearchResults = lazy(() => import('./pages/SearchResults'));
+const AdminLogin = lazy(() => import('./pages/AdminLogin'));
 import { STORAGE_KEYS } from '../../config/constants';
 import { useApp } from '../customer/context/AppContext';
 import { adminAPI } from '../../api/admin.api';
@@ -325,21 +326,23 @@ const AdminApp = () => {
   console.log('✅ Admin authenticated, showing dashboard');
   return (
     <AdminLayout>
-      <Routes>
-        <Route path="/" element={<AdminDashboard />} />
-        <Route path="/analytics" element={<Analytics />} />
-        <Route path="/cities" element={<CityManagement />} />
-        <Route path="/merchants" element={<MerchantManagement />} />
-        <Route path="/users" element={<UserManagement />} />
-        <Route path="/plans" element={<SubscriptionManagement />} />
-        <Route path="/ads" element={<AdRequestManagement />} />
-        <Route path="/ledger" element={<BookingLedger />} />
-        <Route path="/categories" element={<CategoryManagement />} />
-        <Route path="/notifications" element={<Notifications />} />
-        <Route path="/search" element={<SearchResults />} />
-        <Route path="/login" element={<Navigate to="/admin" replace />} />
-        <Route path="*" element={<Navigate to="/admin" replace />} />
-      </Routes>
+      <Suspense fallback={<div className="p-8 text-center text-gray-500 font-bold">Initializing Portal...</div>}>
+        <Routes>
+          <Route path="/" element={<AdminDashboard />} />
+          <Route path="/analytics" element={<Analytics />} />
+          <Route path="/cities" element={<CityManagement />} />
+          <Route path="/merchants" element={<MerchantManagement />} />
+          <Route path="/users" element={<UserManagement />} />
+          <Route path="/plans" element={<SubscriptionManagement />} />
+          <Route path="/ads" element={<PromotionRequest />} />
+          <Route path="/ledger" element={<BookingLedger />} />
+          <Route path="/categories" element={<CategoryManagement />} />
+          <Route path="/notifications" element={<Notifications />} />
+          <Route path="/search" element={<SearchResults />} />
+          <Route path="/login" element={<Navigate to="/admin" replace />} />
+          <Route path="*" element={<Navigate to="/admin" replace />} />
+        </Routes>
+      </Suspense>
     </AdminLayout>
   );
 };

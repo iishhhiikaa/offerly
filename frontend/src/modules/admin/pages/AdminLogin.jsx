@@ -247,8 +247,8 @@ const AdminLogin = () => {
                     <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
                       <p className="text-xs font-bold text-gray-600 mb-2">🔧 Development Credentials:</p>
                       <div className="space-y-1 text-xs text-gray-600">
-                        <p><span className="font-semibold">Email:</span> admin@offerly.in</p>
-                        <p><span className="font-semibold">Password:</span> offerly123</p>
+                        <p><span className="font-semibold">Email:</span> admin@offerly.com</p>
+                        <p><span className="font-semibold">Password:</span> Admin@123</p>
                         <p className="text-[10px] text-gray-500 mt-2">
                           Note: If these don't work, check database seeding
                         </p>

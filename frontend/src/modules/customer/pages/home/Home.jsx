@@ -5,7 +5,6 @@ import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownR
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import LocationOnRoundedIcon from '@mui/icons-material/LocationOnRounded';
-import VerifiedRoundedIcon from '@mui/icons-material/VerifiedRounded';
 import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded';
 import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import RestaurantRoundedIcon from '@mui/icons-material/RestaurantRounded';
@@ -89,16 +88,19 @@ const getColorForCategory = (label) => {
 const Home = () => {
   const navigate = useNavigate();
   const { user, selectedCity, setSelectedCity, setSelectedCategory } = useApp();
+  const useUnifiedFeed = import.meta.env.VITE_USE_UNIFIED_FEED !== 'false';
   const [categories, setCategories] = useState([]);
   const [citySheetOpen, setCitySheetOpen] = useState(false);
   const [availableCities, setAvailableCities] = useState([]);
   const [userCoords, setUserCoords] = useState(null);
+  const [cityRequired, setCityRequired] = useState(false);
   
   // Sections data
   const [featuredBanners, setFeaturedBanners] = useState([]);
-  const [latestOffers, setLatestOffers] = useState([]);
+  const [trendingOffers, setTrendingOffers] = useState([]);
   const [nearbyOffers, setNearbyOffers] = useState([]);
-  const [trendingMerchants, setTrendingMerchants] = useState([]);
+  const [recommendedOffers, setRecommendedOffers] = useState([]);
+  const [mostPopulatedStores, setMostPopulatedStores] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   
   // Carousel state
@@ -143,61 +145,84 @@ const Home = () => {
     const loadData = async () => {
       setIsLoading(true);
       try {
+        const resolvedCity =
+          selectedCity !== 'Select City' ? selectedCity : (user?.city || '');
+
+        if (!resolvedCity) {
+          setCityRequired(true);
+          setFeaturedBanners([]);
+          setTrendingOffers([]);
+          setNearbyOffers([]);
+          setRecommendedOffers([]);
+          setMostPopulatedStores([]);
+          setIsLoading(false);
+          return;
+        }
+
+        setCityRequired(false);
+
         // Base query parameters
         const baseParams = { 
-          status: 'active',
-          city: selectedCity !== 'Select City' ? selectedCity : undefined,
+          city: resolvedCity,
           userLat: userCoords?.lat,
           userLng: userCoords?.lng
         };
 
-        // Fetch data based on context
-        const [
-          adsResponse,
-          trendingOffersResponse, 
-          newOffersResponse,
-          nearbyOffersResponse,
-          trendingMerchantsResponse
-        ] = await Promise.all([
-          adAPI.getApproved({ city: baseParams.city }), // Public ads
-          offerAPI.getAll({ ...baseParams, isTrending: true, limit: 5 }),
-          offerAPI.getAll({ ...baseParams, isNew: true, limit: 4 }),
-          offerAPI.getAll({ ...baseParams, limit: 4 }), // General nearby Deals
-          merchantAPI.getAll({ 
-            ...baseParams, 
-            status: 'approved',
-            sortBy: 'totalRedemptions',
-            sortOrder: 'desc',
-            limit: 3
-          }),
-        ]);
+        if (useUnifiedFeed) {
+          const feedResponse = await offerAPI.getFeed(baseParams);
+          const buckets = feedResponse?.buckets || {};
 
-        const allAds = adsResponse.ads || [];
-        const trendingOffers = trendingOffersResponse.offers || [];
-        const newOffers = newOffersResponse.offers || [];
-        const nearbyOffersData = nearbyOffersResponse.offers || [];
-        const trendingStores = trendingMerchantsResponse.merchants || [];
+          setFeaturedBanners(feedResponse?.banners || []);
+          setTrendingOffers(buckets.trendingOffers || []);
+          setNearbyOffers(buckets.nearYouOffers || []);
+          setMostPopulatedStores(buckets.mostPopulatedStores || []);
+          setRecommendedOffers(buckets.recommendedOffers || []);
+        } else {
+          // Legacy fallback mode
+          const [
+            adsResponse,
+            trendingOffersResponse, 
+            nearbyOffersResponse,
+            trendingMerchantsResponse
+          ] = await Promise.all([
+            adAPI.getApproved({ city: baseParams.city }),
+            offerAPI.getAll({ ...baseParams, status: 'active', isTrending: true, limit: 5 }),
+            offerAPI.getAll({ ...baseParams, status: 'active', limit: 4 }),
+            merchantAPI.getAll({ 
+              ...baseParams, 
+              status: 'approved',
+              sortBy: 'totalRedemptions',
+              sortOrder: 'desc',
+              limit: 3
+            }),
+          ]);
 
-        // Mix approved ad banners with organic trending offers for carousel
-        const adBanners = allAds.map(ad => ({
-          ...ad,
-          id: ad._id,
-          title: ad.title || `${ad.storeName} Promotion`,
-          image: ad.image,
-          merchantId: ad.merchantId,
-          isAd: true
-        }));
+          const allAds = adsResponse.ads || [];
+          const trendingOffersData = trendingOffersResponse.offers || [];
+          const nearbyOffersData = nearbyOffersResponse.offers || [];
+          const trendingStores = trendingMerchantsResponse.merchants || [];
 
-        const organicTrending = trendingOffers.map(o => ({
-          ...o,
-          id: o._id,
-          isAd: false
-        }));
+          const adBanners = allAds.map(ad => ({
+            ...ad,
+            id: ad._id,
+            title: ad.title || `${ad.storeName} Promotion`,
+            image: ad.image,
+            merchantId: ad.merchantId,
+            isAd: true
+          }));
 
-        setFeaturedBanners([...adBanners, ...organicTrending].slice(0, 5));
-        setLatestOffers(newOffers);
-        setNearbyOffers(nearbyOffersData);
-        setTrendingMerchants(trendingStores);
+          const organicTrending = trendingOffersData.map(o => ({
+            ...o,
+            id: o._id,
+            isAd: false
+          }));
+
+          setFeaturedBanners([...adBanners, ...organicTrending].slice(0, 5));
+          setTrendingOffers(trendingOffersData);
+          setNearbyOffers(nearbyOffersData);
+          setMostPopulatedStores(trendingStores);
+          setRecommendedOffers([]);
+        }
 
       } catch (error) {
         console.error('Failed to sync home page data:', error);
@@ -207,7 +232,7 @@ const Home = () => {
     };
 
     loadData();
-  }, [selectedCity, userCoords]);
+  }, [selectedCity, user?.city, userCoords, useUnifiedFeed]);
 
   // 4. Auto-sliding Carousel interval
   useEffect(() => {
@@ -222,6 +247,8 @@ const Home = () => {
     setSelectedCategory(name);
     navigate('/explore');
   };
+
+  const displayCity = selectedCity !== 'Select City' ? selectedCity : (user?.city || 'Select City');
 
   return (
     <PageTransition>
@@ -251,7 +278,7 @@ const Home = () => {
                 className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 transition-colors px-3 py-1.5 rounded-full mb-6 w-fit backdrop-blur-sm border border-white/10 text-xs font-semibold"
               >
                 <LocationOnRoundedIcon sx={{ fontSize: 14 }} className="text-green-300" />
-                <span>{selectedCity}</span>
+                <span>{displayCity}</span>
                 <KeyboardArrowDownRoundedIcon sx={{ fontSize: 16 }} className="text-white/80" />
               </button>
 
@@ -272,6 +299,25 @@ const Home = () => {
             </div>
           </div>
         </motion.section>
+
+        {!isLoading && cityRequired && (
+          <motion.section
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-amber-50 border border-amber-200 rounded-2xl p-4"
+          >
+            <h3 className="text-sm font-bold text-amber-900">Select your city to see local offers</h3>
+            <p className="text-xs text-amber-800 mt-1">
+              Feed is city-based. Please choose your city to load Trending, Near You and Recommended offers.
+            </p>
+            <button
+              onClick={() => setCitySheetOpen(true)}
+              className="mt-3 text-xs font-semibold bg-amber-600 text-white px-3 py-2 rounded-lg"
+            >
+              Select City
+            </button>
+          </motion.section>
+        )}
 
         {/* 2. Categories Section */}
         <motion.section variants={containerVariants} initial="hidden" animate="visible">
@@ -312,7 +358,7 @@ const Home = () => {
             className="pt-2"
           >
             <SectionHeader title="Top Promotions" icon={LocalOfferRoundedIcon} onAction={() => navigate('/explore')} />
-            <div className="relative h-44 sm:h-56 md:h-60 lg:h-64 max-w-4xl mx-auto rounded-[1.5rem] overflow-hidden shadow-card border border-border">
+            <div className="relative h-44 sm:h-56 md:h-60 lg:h-64 rounded-[1.5rem] overflow-hidden shadow-card border border-border">
               <AnimatePresence mode="wait">
                   <motion.div
                   key={currentSlide}
@@ -363,16 +409,16 @@ const Home = () => {
           </motion.section>
         )}
 
-        {/* 4. Latest Offers */}
-        {!isLoading && latestOffers.length > 0 && (
+        {/* 4. Trending Offers */}
+        {!isLoading && trendingOffers.length > 0 && (
           <motion.section
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
           >
-            <SectionHeader title="New on Offerly ✨" onAction={() => navigate('/explore')} />
+            <SectionHeader title="Trending Offers" icon={TrendingUpRoundedIcon} onAction={() => navigate('/explore')} />
             <div className="flex overflow-x-auto scrollbar-hide -mx-4 md:-mx-6 px-4 md:px-6 gap-4 pb-4 snap-x">
-              {latestOffers.map((offer) => (
+              {trendingOffers.map((offer) => (
                 <div key={offer._id || offer.id} className="w-[260px] flex-shrink-0 snap-start">
                   <OfferCard offer={offer} variant="grid" />
                 </div>
@@ -381,16 +427,16 @@ const Home = () => {
           </motion.section>
         )}
 
-        {/* 5. Trending Stores */}
-        {!isLoading && trendingMerchants.length > 0 && (
+        {/* 5. Most Populated Stores */}
+        {!isLoading && mostPopulatedStores.length > 0 && (
           <motion.section
              initial={{ opacity: 0, y: 16 }}
              animate={{ opacity: 1, y: 0 }}
              transition={{ delay: 0.4 }}
           >
-            <SectionHeader title="Trending Stores" icon={TrendingUpRoundedIcon} onAction={() => navigate('/explore')} />
+            <SectionHeader title="Most Populated Stores" icon={StorefrontRoundedIcon} onAction={() => navigate('/explore')} />
             <div className="space-y-3">
-              {trendingMerchants.map((merchant, idx) => (
+              {mostPopulatedStores.map((merchant, idx) => (
                 <motion.div
                   key={merchant._id || merchant.id}
                   initial={{ opacity: 0, x: -8 }}
@@ -431,6 +477,29 @@ const Home = () => {
           </motion.section>
         )}
 
+        {/* 7. Recommended Offers */}
+        {!isLoading && recommendedOffers.length > 0 && (
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+          >
+            <SectionHeader title="Recommended for You" onAction={() => navigate('/explore')} />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {recommendedOffers.map((offer, idx) => (
+                <motion.div
+                  key={offer._id || offer.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.52 + idx * 0.06 }}
+                >
+                  <OfferCard offer={offer} variant="list" />
+                </motion.div>
+              ))}
+            </div>
+          </motion.section>
+        )}
+
         {/* Loading Skeletons */}
         {isLoading && (
           <div className="space-y-12 pt-4">
@@ -460,12 +529,12 @@ const Home = () => {
               whileTap={{ scale: 0.95 }}
               onClick={() => { setSelectedCity(city.name); setCitySheetOpen(false); }}
               className={`flex items-center justify-center gap-2 p-3.5 rounded-xl border-2 text-sm font-semibold transition-all ${
-                selectedCity === city.name
+                displayCity === city.name
                   ? 'border-primary bg-primary/10 text-primary shadow-sm shadow-primary/10'
                   : 'border-border text-text-secondary hover:border-gray-300'
               }`}
             >
-              <LocationOnRoundedIcon sx={{ fontSize: 18 }} className={selectedCity === city.name ? 'text-primary' : 'text-gray-400'} />
+              <LocationOnRoundedIcon sx={{ fontSize: 18 }} className={displayCity === city.name ? 'text-primary' : 'text-gray-400'} />
               {city.name}
             </motion.button>
           ))}

@@ -10,6 +10,7 @@ import adminCategoryRoutes from "./modules/admin/routes/categoryRoutes.js";
 import cityRoutes from "./modules/admin/routes/cityRoutes.js";
 import planRoutes from "./modules/admin/routes/planRoutes.js";
 import redemptionRoutes from "./modules/booking/routes/redemptionRoutes.js";
+import cartRoutes from "./modules/booking/routes/cartRoutes.js";
 import merchantRoutes from "./modules/merchant/routes/merchantRoutes.js";
 import offerRoutes from "./modules/merchant/routes/offerRoutes.js";
 import productRoutes from "./modules/merchant/routes/productRoutes.js";
@@ -23,6 +24,7 @@ import categoryRoutes from "./routes/categoryRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import { seedDefaultAdmin } from "./modules/admin/utils/adminSeeder.js";
 import { seedCategories } from "./seeders/categorySeeder.js";
+import { initCronJobs } from "./scripts/cronJobs.js";
 
 dotenv.config();
 
@@ -49,12 +51,18 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true, limit: "30mb" }));
 
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  console.log('Body:', req.body);
-  next();
-});
+const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
+const logRequestBody = process.env.LOG_REQUEST_BODY === "true";
+
+if (enableRequestLogs) {
+  app.use((req, _res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    if (logRequestBody && req.body && Object.keys(req.body).length > 0) {
+      console.log("Body keys:", Object.keys(req.body));
+    }
+    next();
+  });
+}
 
 app.get("/api/health", (_req, res) => {
   const connectionState =
@@ -86,6 +94,7 @@ app.use("/api/service-plans", servicePlanRoutes);
 app.use("/api/variants", variantRoutes);
 app.use("/api/offers", offerRoutes);
 app.use("/api/redemptions", redemptionRoutes);
+app.use("/api/cart", cartRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/categories", adminCategoryRoutes);
 app.use("/api/categories", categoryRoutes);
@@ -109,6 +118,7 @@ const startServer = async () => {
   await seedDefaultAdmin();
   await seedCategories();
 
+  initCronJobs();
   initSocket(httpServer);
 
   httpServer.listen(port, () => {

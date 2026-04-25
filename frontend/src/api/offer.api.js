@@ -2,6 +2,11 @@ import axiosInstance from './axios';
 import { API_ENDPOINTS } from '../config/constants';
 
 export const offerAPI = {
+  // Unified customer feed (city-locked buckets)
+  getFeed: async (params) => {
+    return axiosInstance.get('/offers/feed', { params });
+  },
+
   // Get all offers with optional filters
   getAll: async (params) => {
     return axiosInstance.get(API_ENDPOINTS.GET_OFFERS, { params });

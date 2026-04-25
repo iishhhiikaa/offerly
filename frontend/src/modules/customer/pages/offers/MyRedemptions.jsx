@@ -20,6 +20,7 @@ const statusConfig = {
 const MyRedemptions = () => {
   const navigate = useNavigate();
   const [redemptions, setRedemptions] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadRedemptions = async () => {
@@ -30,10 +31,24 @@ const MyRedemptions = () => {
         }
       } catch (error) {
         console.error('Failed to fetch redemptions:', error);
+      } finally {
+        setLoading(false);
       }
     };
     loadRedemptions();
   }, []);
+
+  if (loading) {
+    return (
+      <PageTransition>
+        <div className="px-4 py-4 pb-6 space-y-4">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="h-24 bg-surface rounded-2xl animate-pulse"></div>
+          ))}
+        </div>
+      </PageTransition>
+    );
+  }
 
   return (
     <PageTransition>
@@ -53,7 +68,11 @@ const MyRedemptions = () => {
             {redemptions.map((redemption, idx) => {
               const offer = redemption.offerId;
               const merchant = redemption.merchantId;
-              const config = statusConfig[redemption.status] || statusConfig.pending;
+              
+              const isLocalExpired = redemption.status === 'pending' && new Date(redemption.qrExpiry) < new Date();
+              const displayStatus = isLocalExpired ? 'expired' : redemption.status;
+              
+              const config = statusConfig[displayStatus] || statusConfig.pending;
               const StatusIcon = config.icon;
               const date = new Date(redemption.createdAt).toLocaleDateString('en-IN', {
                 day: 'numeric', month: 'short', year: 'numeric',
@@ -102,7 +121,7 @@ const MyRedemptions = () => {
                           Review
                         </button>
                       )}
-                      {redemption.status === 'pending' && (
+                      {displayStatus === 'pending' && (
                         <motion.button
                           whileTap={{ scale: 0.95 }}
                           onClick={() => navigate(`/redeem/${redemption._id || redemption.id}`)}

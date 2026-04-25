@@ -202,7 +202,7 @@ const ServiceOfferForm = ({ merchant, storeConfig, onSuccess, onCancel }) => {
       // Create offer
       const offerPayload = {
         offerType: 'service',
-        servicePlanId: formData.selectedServicePlan._id,
+        servicePlanId: formData.selectedServicePlan._id || formData.selectedServicePlan.id,
         title: formData.title,
         description: formData.description,
         discountType: formData.discountType,

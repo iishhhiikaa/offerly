@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { getRedemptionsByMerchant, getAllUsers } from '../../customer/data/localStorageUtils';
+import { merchantAPI } from '../../../api/merchant.api';
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import PeopleAltRoundedIcon from '@mui/icons-material/PeopleAltRounded';
 import LocalOfferRoundedIcon from '@mui/icons-material/LocalOfferRounded';
@@ -9,35 +9,41 @@ import AttachMoneyRoundedIcon from '@mui/icons-material/AttachMoneyRounded';
 const Customers = ({ merchant }) => {
   const [customerData, setCustomerData] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!merchant) return;
-    const redemptions = getRedemptionsByMerchant(merchant.id).filter(r => r.status === 'completed' || r.status === 'fulfilled');
-    const users = getAllUsers();
-
-    // Aggregate data by customer
-    const aggregation = redemptions.reduce((acc, r) => {
-      const cid = r.customerId;
-      if (!acc[cid]) {
-        acc[cid] = {
-          id: cid,
-          name: r.customerName || 'Guest User',
-          phone: users.find(u => u.id === cid)?.phone || 'N/A',
-          totalRedemptions: 0,
-          totalSpend: 0,
-          lastVisit: r.scannedAt || r.createdAt
-        };
-      }
-      acc[cid].totalRedemptions += 1;
-      acc[cid].totalSpend += (r.totals?.final || 0);
-      if (new Date(r.scannedAt || r.createdAt) > new Date(acc[cid].lastVisit)) {
-        acc[cid].lastVisit = r.scannedAt || r.createdAt;
-      }
-      return acc;
-    }, {});
-
-    setCustomerData(Object.values(aggregation).sort((a,b) => b.totalSpend - a.totalSpend));
+    if (!merchant) {
+      setLoading(false);
+      return;
+    }
+    loadCustomers();
   }, [merchant]);
+
+  const loadCustomers = async () => {
+    try {
+      setLoading(true);
+      const response = await merchantAPI.getCustomers();
+      
+      if (response?.customers) {
+        // Map API response to match existing UI expectations
+        const mapped = response.customers.map(c => ({
+          id: c.id,
+          name: c.name || 'Guest User',
+          phone: c.phone || 'N/A',
+          email: c.email || '',
+          totalRedemptions: c.visits || 0,
+          totalSpend: c.spend || 0,
+          lastVisit: c.lastVisit
+        }));
+        setCustomerData(mapped.sort((a, b) => b.totalSpend - a.totalSpend));
+      }
+    } catch (error) {
+      console.error('Failed to load customers:', error);
+      setCustomerData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const filtered = customerData.filter(c => 
     c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -95,7 +101,14 @@ const Customers = ({ merchant }) => {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="!py-20 text-center">
+                    <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mx-auto mb-4" />
+                    <p className="text-gray-400 font-medium text-sm">Loading customers...</p>
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="!py-20 text-center">
                     <PeopleAltRoundedIcon className="text-gray-200 mb-2" sx={{fontSize: 48}} />
@@ -167,7 +180,12 @@ const Customers = ({ merchant }) => {
 
         {/* Mobile Card View */}
         <div className="lg:hidden divide-y divide-gray-100/80">
-          {filtered.length === 0 ? (
+          {loading ? (
+            <div className="px-4 py-20 text-center">
+              <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mx-auto mb-4" />
+              <p className="text-gray-400 font-medium text-sm">Loading customers...</p>
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="px-4 py-20 text-center">
               <PeopleAltRoundedIcon className="text-gray-200 mb-2" sx={{fontSize: 48}} />
               <p className="text-gray-400 font-medium text-sm">No customer history available.</p>

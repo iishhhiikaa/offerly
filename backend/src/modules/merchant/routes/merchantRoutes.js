@@ -15,6 +15,9 @@ import {
   updateKYBDocuments,
   updateLocationHours,
   getStoreConfig,
+  getMyNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
 } from "../controllers/merchantController.js";
 
 const router = express.Router();
@@ -32,6 +35,12 @@ router.post("/me/registration/location-hours", protect, authorize("merchant"), u
 router.get("/me/dashboard", protect, authorize("merchant", "admin"), getMerchantDashboard);
 router.get("/me/customers", protect, authorize("merchant", "admin"), getMerchantCustomers);
 router.get("/me/subscription", protect, authorize("merchant", "admin"), getMySubscription);
+
+// Notification Routes
+router.get("/me/notifications", protect, authorize("merchant"), getMyNotifications);
+router.patch("/me/notifications/:id/read", protect, authorize("merchant"), markNotificationRead);
+router.patch("/me/notifications/mark-all-read", protect, authorize("merchant"), markAllNotificationsRead);
+
 router.post("/register", protect, authorize("merchant"), registerStore);
 router.put("/me", protect, authorize("merchant", "admin"), updateMyStore);
 router.get("/:id", optionalAuth, getMerchantById);
